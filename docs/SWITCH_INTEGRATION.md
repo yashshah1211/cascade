@@ -6,12 +6,12 @@ This document records the architecture, security boundary, live integration veri
 
 ## 1. Executive Summary & Verification State
 
-- **Workflow State:** Verified Genuine Human-in-the-Loop Collaboration Architecture (Mission 02E Completed).
+- **Workflow State:** Human-approved local recovery demonstrated, including a later Antigravity ACP-initiated idempotent execution check (Mission 02F).
 - **Engine Authorization Boundary:** Fail-closed. Untrusted inputs, unauthenticated messages, bot accounts, webhooks, and mismatched rooms or servers are strictly rejected.
 - **Human Approval Verification:** Real human approval personally submitted by the authorized event owner (`oh47xmfeafyapbjyhhri6bucae`) in Mattermost Town Square (Post ID: `w7gx4ku4ybdtirmhs36feexciw`).
 - **Deterministic Execution:** Real recovery execution performed by `executeVerifiedRecovery` with receipt state `APPLIED_LOCALLY`.
 - **Receipt Notification:** Execution receipt posted to Mattermost Town Square thread (Post ID: `d41a43t9rtnyid9ho3dhjyfy8o`). Replay execution verifies existing artifacts, returns `alreadyApplied: true`, and suppresses duplicate receipt notifications.
-- **Automated Test Suite:** 56/56 passing tests across unit, security regression, artifact integrity, live verifier, and idempotent collaboration suites.
+- **Automated Test Suite:** 66/66 passing tests on the reviewed GitHub feature branch, covering engine constraints, verifier defense, artifact integrity, replay, and safe Switch operations setup. Public CI does not replay the local Mattermost conversation.
 - **Execution Safeguards:** Local artifacts only (`APPLIED_LOCALLY`). External actions (venue booking, supplier purchase, broadcast notification) remain non-executable drafts (`# Drafts only — NOT SENT`).
 - **Security Hotfix:** All previously exposed tokens have been revoked in PostgreSQL `useraccesstokens` and active `sessions`. Both old tokens are confirmed to return HTTP 401 Unauthorized. No secrets or tokens are stored in tracked repository files.
 
@@ -252,3 +252,34 @@ python scripts/setup-switch-operations.py --target "C:\Users\yashs\AppData\Roami
 | **ACP Tool Schemas** | `.local/state/switch/antigravity-acp/.../mcp/switch/` | Registered `cascade_evaluate_recovery.json` and `cascade_execute_recovery.json` | Delete `cascade_*.json` from the brain MCP directory |
 | **PostgreSQL Database** | `rooms` and `room_agents` tables (`switch` DB on port 59114) | Added room mapping `6fe42a1c-6f29-45de-8aca-da763634216e` and assigned agent | `DELETE FROM room_agents WHERE room_id = '6fe42a1c-6f29-45de-8aca-da763634216e'; DELETE FROM rooms WHERE id = '6fe42a1c-6f29-45de-8aca-da763634216e';` |
 | **Host PATH** | Windows User `Path` | Added `C:\Users\yashs\tools\antigravity-acp\bin` | Remove directory from User `Path` |
+
+
+---
+
+## 8. Antigravity-initiated Execution Evidence (Mission 02F)
+
+**Recorded local evidence — not a public hosted live session.** The following facts were collected from the Antigravity ACP transcript on the Windows Switch installation and reviewed against the GitHub implementation. They should be reproduced with sanitized excerpts in the demo recording.
+
+| Evidence item | Result |
+| --- | --- |
+| ACP provider | Google Antigravity ACP, model advertised as gemini-3.8-flash |
+| Switch agent | switch-buddy-admin |
+| ACP session | d84a1440-ffbc-464c-a1d6-0a4885de9a70 |
+| Transcript step 107 | Model-generated call_mcp_tool to Switch operation cascade_execute_recovery |
+| Transcript step 108 | CLI node dist/src/cli/recover.js, exit_code 0, success true |
+| Existing human approval | w7gx4ku4ybdtirmhs36feexciw, authenticated from configured human account |
+| Idempotent result | State APPLIED_LOCALLY, Already Applied true |
+| Transcript steps 109–111 | Model posted status to the Switch room and ended turn |
+| Duplicate receipt posts | None reported on replay; original receipt retained |
+
+**Sequence matters:** The initial verified local execution used the standalone recovery CLI and produced the artifact set plus a Mattermost receipt. The subsequent Antigravity-initiated execution operation did **not** create a new first-time receipt: it verified the existing artifacts and returned the same execution key. This is intentionally different from asserting that the agent itself caused the original artifact publication.
+
+The publicly committed test suite validates local engine behavior and tool-setup safety. Access to the real Mattermost posts and ACP transcript requires the project owner's own local Switch installation.
+
+### Current integration limitations
+
+- The CLI/test suite is portable, but the live integration uses a **bounded local patch** to an installed Switch Core operations module. It is not an official upstream extension, and other Switch versions may differ.
+- The setup script requires an explicitly selected target, creates a backup, supports dry run and bounded rollback, and rejects ambiguous legacy markers rather than truncating vendor code.
+- Credentials and OAuth caches are local only. They must not be committed or included in demo screenshots.
+- The standalone dashboard is **OFFLINE_SIMULATION** and has no live Switch connection; the collaboration is demonstrated in Switch/Mattermost.
+- All event and budget facts are synthetic; no live venue booking, financial transaction, or stakeholder broadcast is performed.
