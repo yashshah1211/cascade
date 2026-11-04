@@ -27,7 +27,7 @@ If `git switch` complains about local modifications, **stop** and preserve your 
 
 The launcher installs isolated Playwright, Chromium, FFmpeg and FFprobe packages as needed, builds the TypeScript engine, verifies the existing receipt, **optionally** verifies the ACP transcript, and opens a dedicated Chromium window to read the Mattermost posts. If the historical ACP transcript uses an unknown format, the recorder omits that optional scene, labels the omission, and continues with verified artifacts and authenticated Mattermost posts.
 
-**Only on the first run**, Chromium may ask you to sign into Mattermost. Do so manually in that browser window, return to the command window and press Enter. Credentials are never requested by CASCADE Studio or placed in repository files.
+**Only on the first run**, Chromium may ask you to sign into Mattermost. **Sign in inside the NEW Chromium window opened by the recorder**, not normal Chrome or Mattermost Desktop. The recorder detects your authenticated session automatically; **do not press Enter in PowerShell**. Credentials are never requested by CASCADE Studio or placed in repository files.
 
 After that, the recorder should run without further interaction and open the resulting MP4 when done.
 
@@ -118,7 +118,7 @@ This tool is Windows-specific for built-in text-to-speech. The core CASCADE engi
 
 ## Troubleshooting
 
-**Mattermost login required:** Sign into the Chromium window, then press Enter in the command window. Later runs reuse this login until it expires.
+**Mattermost login required:** Sign in using the dedicated Chromium window opened by the script. Your existing Chrome/Mattermost Desktop login is not shared with this separate profile. The script detects login automatically. If it cannot detect login, verify the page shows Town Square in that exact window and rerun; later runs reuse the profile until the session expires.
 
 **Missing or unfamiliar ACP transcript:** No need to rerun AGY or fabricate an agent tool call. The recorder can proceed with verified Mattermost posts and local execution artifacts, omitting the optional agent-replay scene. To share a **safe metadata-only** diagnostic, run `record-demo.cmd --inspect-acp` and share only the printed field-type summary (no raw transcript). The studio never displays unverified execution trace content.
 
