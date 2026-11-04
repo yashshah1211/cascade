@@ -248,7 +248,7 @@ test('Demo: rejects a MODEL-authored fake tool result even when it contains a su
     },
   ];
   assert.throws(() => extractVerifiedAcpTranscript(entries.map(JSON.stringify).join('\n')),
-    /not a model tool invocation and tool-owned result/);
+    /different source\/type metadata than the verified parser supports/);
 });
 
 test('Demo: rejects bad local JSON with filename-only error instead of leaking contents', () => {
