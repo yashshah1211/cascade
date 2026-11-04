@@ -140,10 +140,10 @@ test('Switch Setup Script: rollback restores original file from backup', async (
     });
 
     assert.equal(rollbackResult.status, 0);
-    assert.match(rollbackResult.stdout, /\[ROLLBACK\] Restored original definitions\.py from backup/);
+    assert.match(rollbackResult.stdout, /\[ROLLBACK\] Removed only the bounded CASCADE block/);
 
     const contentAfter = await readFile(testFile, 'utf-8');
-    assert.equal(contentAfter, SAMPLE_DEFINITIONS_ORIGINAL);
+    assert.equal(contentAfter.trimEnd(), SAMPLE_DEFINITIONS_ORIGINAL.trimEnd());
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -157,4 +157,106 @@ test('Switch Setup Script: contains no hardcoded machine-specific credential pat
   // Verify no hardcoded token or password assignments
   assert.doesNotMatch(scriptContent, /(?:TOKEN|SECRET|PASSWORD)\s*=\s*['"][a-zA-Z0-9_.-]{8,}['"]/i);
   assert.doesNotMatch(scriptContent, /['"]Bearer\s+[a-zA-Z0-9_-]{10,}['"]/i);
+});
+
+
+test('Switch Setup Script: legacy start marker without end fails closed on setup and rollback', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'switch-legacy-test-'));
+  const testFile = join(tempDir, 'definitions.py');
+  const legacy = SAMPLE_DEFINITIONS_ORIGINAL +
+    '\n# ── CASCADE Deterministic Operations (Flip the Switch 2026) ──\n' +
+    '@operation\nasync def cascade_evaluate_recovery(mode="demo"):\n    return {}\n' +
+    '\ndef unrelated_vendor_function_after_cascade():\n    return "must-survive"\n';
+  await writeFile(testFile, legacy, 'utf-8');
+
+  try {
+    for (const extraArgs of [[], ['--dry-run'], ['--rollback'], ['--rollback', '--dry-run']]) {
+      const result = spawnSync('python', ['scripts/setup-switch-operations.py', '--target', testFile, ...extraArgs], {
+        encoding: 'utf-8',
+        cwd: process.cwd(),
+      });
+      assert.equal(result.status, 1, 'Legacy unbounded marker must be refused');
+      assert.match(result.stdout, /refusing to edit/i);
+      assert.equal(await readFile(testFile, 'utf-8'), legacy, 'Unrelated vendor function must survive');
+      assert.equal(await readFile(testFile + '.bak', 'utf-8').catch(() => null), null);
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Switch Setup Script: unmarked legacy operations are rejected without truncating trailing code', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'switch-legacy-test-'));
+  const testFile = join(tempDir, 'definitions.py');
+  const legacy = SAMPLE_DEFINITIONS_ORIGINAL +
+    '\n@operation\ndef cascade_execute_recovery(approval_message_id):\n    return {}\n' +
+    '\ndef another_vendor_operation():\n    return "preserved"\n';
+  await writeFile(testFile, legacy, 'utf-8');
+
+  try {
+    for (const extraArgs of [[], ['--rollback']]) {
+      const result = spawnSync('python', ['scripts/setup-switch-operations.py', '--target', testFile, ...extraArgs], {
+        encoding: 'utf-8',
+        cwd: process.cwd(),
+      });
+      assert.equal(result.status, 1);
+      assert.match(result.stdout, /Legacy CASCADE operations have no complete markers/);
+      assert.equal(await readFile(testFile, 'utf-8'), legacy);
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Switch Setup Script: rollback preserves vendor changes made after the backup', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'switch-rollback-test-'));
+  const testFile = join(tempDir, 'definitions.py');
+  await writeFile(testFile, SAMPLE_DEFINITIONS_ORIGINAL, 'utf-8');
+
+  try {
+    const setup = spawnSync('python', ['scripts/setup-switch-operations.py', '--target', testFile], {
+      encoding: 'utf-8',
+      cwd: process.cwd(),
+    });
+    assert.equal(setup.status, 0);
+    const newerVendorChange = '\n\ndef vendor_change_added_after_install():\n    return "keep me"\n';
+    await writeFile(testFile, (await readFile(testFile, 'utf-8')) + newerVendorChange, 'utf-8');
+    const rollback = spawnSync('python', ['scripts/setup-switch-operations.py', '--target', testFile, '--rollback'], {
+      encoding: 'utf-8',
+      cwd: process.cwd(),
+    });
+    assert.equal(rollback.status, 0);
+    const result = await readFile(testFile, 'utf-8');
+    assert.match(result, /vendor_change_added_after_install/);
+    assert.match(result, /existing_unrelated_op_1/);
+    assert.match(result, /existing_unrelated_op_2/);
+    assert.doesNotMatch(result, /# ── CASCADE Deterministic Operations/);
+    assert.equal(await readFile(testFile + '.bak', 'utf-8'), SAMPLE_DEFINITIONS_ORIGINAL);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Switch Setup Script: malformed or reversed markers fail closed', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'switch-bad-markers-test-'));
+  const testFile = join(tempDir, 'definitions.py');
+  const corrupted = SAMPLE_DEFINITIONS_ORIGINAL +
+    '\n# ── END CASCADE Deterministic Operations ──\n' +
+    '# ── CASCADE Deterministic Operations (Flip the Switch 2026) ──\n' +
+    'def vendor_code():\n    return True\n';
+  await writeFile(testFile, corrupted, 'utf-8');
+
+  try {
+    for (const extraArgs of [[], ['--rollback']]) {
+      const result = spawnSync('python', ['scripts/setup-switch-operations.py', '--target', testFile, ...extraArgs], {
+        encoding: 'utf-8',
+        cwd: process.cwd(),
+      });
+      assert.equal(result.status, 1);
+      assert.match(result.stdout, /refusing to edit/);
+      assert.equal(await readFile(testFile, 'utf-8'), corrupted);
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
