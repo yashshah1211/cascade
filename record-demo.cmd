@@ -4,9 +4,10 @@ cd /d "%~dp0"
 set "MODE="
 if /I "%~1"=="--check-only" set "MODE=-CheckOnly"
 if /I "%~1"=="--capture-only" set "MODE=-CaptureOnly"
+if /I "%~1"=="--inspect-acp" set "MODE=-InspectAcp"
 if not "%~1"=="" if not defined MODE (
   echo Unrecognized argument: %~1
-  echo Valid options: --check-only or --capture-only
+  echo Valid options: --check-only, --inspect-acp or --capture-only
   exit /b 2
 )
 echo Launching CASCADE Auto Demo Studio...
