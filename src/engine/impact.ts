@@ -1,15 +1,19 @@
 import type { Commitment, Disruption, Impact, Scenario } from '../domain/types.js';
+import { validateDisruption, validateScenario } from '../domain/validate.js';
 
 /** Builds a directed prerequisite → dependent graph, and returns explainable BFS paths. */
 export function traceImpact(scenario: Scenario, disruption: Disruption): Impact[] {
-  const outgoing = new Map<string, string[]>();
+  validateScenario(scenario);
+  validateDisruption(disruption);
+
+  const outgoing = new Map<string, Set<string>>();
   const commitments = new Map<string, Commitment>();
   for (const c of scenario.commitments) {
     commitments.set(c.id, c);
     for (const d of c.dependencies) {
-      const list = outgoing.get(d.prerequisiteId) ?? [];
-      list.push(c.id);
-      outgoing.set(d.prerequisiteId, list);
+      const set = outgoing.get(d.prerequisiteId) ?? new Set<string>();
+      set.add(c.id);
+      outgoing.set(d.prerequisiteId, set);
     }
   }
   const queue: string[][] = [[disruption.disabledNodeId]];
@@ -18,7 +22,8 @@ export function traceImpact(scenario: Scenario, disruption: Disruption): Impact[
   for (let index = 0; index < queue.length; index++) {
     const path = queue[index]!;
     const current = path[path.length - 1]!;
-    for (const next of (outgoing.get(current) ?? []).sort()) {
+    const neighbors = [...(outgoing.get(current) ?? [])].sort();
+    for (const next of neighbors) {
       if (seen.has(next)) continue;
       seen.add(next);
       const nextPath = [...path, next];

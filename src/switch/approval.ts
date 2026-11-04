@@ -1,5 +1,5 @@
 import type { RecoveryPlan, Scenario, TrustedSwitchApproval } from '../domain/types.js';
-import { planHash } from '../domain/validate.js';
+import { isoMillis, planHash, validatePlan, validateScenario } from '../domain/validate.js';
 
 /** Private in-process brand. Arbitrary JSON cannot impersonate a verified Switch event. */
 const VERIFIED = Symbol('verified-by-Switch-message-verifier');
@@ -47,11 +47,24 @@ export async function verifyBudgetApproval(input: {
   verifier: SwitchMessageVerifier;
 }): Promise<VerifiedApproval> {
   const { scenario, plan, ref, verifier, maxExtraINR } = input;
+  validateScenario(scenario);
+  validatePlan(plan, scenario);
   const authority = scenario.approvalAuthority;
+  if (!ref || typeof ref !== 'object') throw new TypeError('Invalid SwitchMessageReference');
+  if (typeof ref.serverId !== 'string' || !ref.serverId.trim())
+    throw new TypeError('Approval reference must have a nonempty serverId');
+  if (typeof ref.roomId !== 'string' || !ref.roomId.trim())
+    throw new TypeError('Approval reference must have a nonempty roomId');
+  if (typeof ref.messageId !== 'string' || !ref.messageId.trim())
+    throw new TypeError('Approval reference must have a nonempty messageId');
+
   if (ref.serverId !== authority.serverId || ref.roomId !== authority.roomId)
     throw new Error('Approval reference is not in the designated Switch operations room');
   if (plan.scenarioId !== scenario.id || plan.scenarioRevision !== scenario.revision)
     throw new Error('Cannot authorize a plan based on an old or different scenario');
+  if (!Number.isSafeInteger(maxExtraINR) || maxExtraINR < 0)
+    throw new TypeError('Invalid exception amount');
+
   const message = await verifier.fetchVerifiedMessage(ref);
   if (!message || message.serverId !== ref.serverId || message.roomId !== ref.roomId || message.messageId !== ref.messageId)
     throw new Error('Switch could not verify the referenced message');
@@ -59,8 +72,14 @@ export async function verifyBudgetApproval(input: {
     throw new Error('Only the designated human owner can authorize a recovery exception');
   if (message.content.trim() !== budgetApprovalCommand(scenario, plan, maxExtraINR))
     throw new Error('The Switch approval message must exactly match the plan hash and exception');
-  if (!Number.isSafeInteger(maxExtraINR) || maxExtraINR < 0)
-    throw new Error('Invalid exception amount');
+
+  const msgTime = isoMillis(message.createdAt);
+  if (msgTime === null)
+    throw new Error('Switch approval message createdAt must be a valid offset ISO timestamp');
+  const kickoffTime = isoMillis(scenario.kickoffAt)!;
+  if (msgTime > kickoffTime)
+    throw new Error('Approval is stale: authorization was posted after event kickoff');
+
   const approval: VerifiedApproval = Object.freeze({
     id: `switch:${ref.serverId}:${ref.roomId}:${ref.messageId}`,
     approvalMessageId: ref.messageId,

@@ -8,7 +8,7 @@ import { evaluatePlan } from '../src/engine/evaluate.js';
 import { traceImpact } from '../src/engine/impact.js';
 import { applyPlan } from '../src/engine/execute.js';
 import { budgetApprovalCommand, verifyBudgetApproval, type SwitchMessageVerifier } from '../src/switch/approval.js';
-import { planHash, validatePlan } from '../src/domain/validate.js';
+import { planHash, validatePlan, validateScenario, validateDisruption } from '../src/domain/validate.js';
 import type { RecoveryPlan, Scenario } from '../src/domain/types.js';
 
 const FIX = await loadFixtures();
@@ -164,4 +164,138 @@ test('Safety — people cannot be silently omitted or double-assigned', () => {
 test('Safety — late sponsor showcase cannot be marked as satisfied', () => {
   const plan = byId('plan-b'); plan.sponsorShowcaseAt = '2026-11-06T12:00:00+05:30';
   assert.equal(evaluatePlan(sc(), plan).checks.find(c => c.id === 'SPONSOR_DEADLINE')?.status, 'FAIL');
+});
+
+test('Hardening — missing commitment prerequisite throws TypeError', () => {
+  const scenario = sc();
+  scenario.commitments[0]!.dependencies.push({ prerequisiteId: 'commitment:nonexistent', kind: 'requires' });
+  assert.throws(() => validateScenario(scenario), /Missing dependency.*commitment:nonexistent/);
+});
+
+test('Hardening — unknown venue prerequisite throws TypeError', () => {
+  const scenario = sc();
+  scenario.commitments[0]!.dependencies = [{ prerequisiteId: 'venue:phantom', kind: 'requires' }];
+  assert.throws(() => validateScenario(scenario), /unknown venue/);
+});
+
+test('Hardening — duplicate prerequisite in single commitment throws TypeError', () => {
+  const scenario = sc();
+  scenario.commitments[0]!.dependencies = [
+    { prerequisiteId: 'venue:main', kind: 'requires' },
+    { prerequisiteId: 'venue:main', kind: 'requires' },
+  ];
+  assert.throws(() => validateScenario(scenario), /Duplicate dependency/);
+});
+
+test('Hardening — self-dependency in commitment throws TypeError', () => {
+  const scenario = sc();
+  scenario.commitments[0]!.dependencies = [{ prerequisiteId: scenario.commitments[0]!.id, kind: 'requires' }];
+  assert.throws(() => validateScenario(scenario), /Self-dependency/);
+});
+
+test('Hardening — cyclic dependency across commitments throws TypeError', () => {
+  const scenario = sc();
+  // Create cycle: commitment:capacity -> commitment:kickoff and commitment:kickoff -> commitment:capacity
+  scenario.commitments.find(c => c.id === 'commitment:capacity')!.dependencies.push({
+    prerequisiteId: 'commitment:kickoff',
+    kind: 'requires',
+  });
+  assert.throws(() => validateScenario(scenario), /Cyclic dependency/);
+});
+
+test('Hardening — post-kickoff approval is rejected as stale', async () => {
+  const staleVerifier = fakeVerifier({
+    // Kickoff is 2026-11-06T10:00:00+05:30; post at 10:30
+    content: budgetApprovalCommand(sc(), byId('plan-b'), 3000),
+  });
+  // Override createdAt with post-kickoff time
+  staleVerifier.fetchVerifiedMessage = async (ref) => ({
+    serverId: ref.serverId,
+    roomId: ref.roomId,
+    messageId: ref.messageId,
+    humanId: sc().approvalAuthority.approverId,
+    authorKind: 'human',
+    content: budgetApprovalCommand(sc(), byId('plan-b'), 3000),
+    createdAt: '2026-11-06T10:30:00+05:30',
+  });
+
+  await assert.rejects(approveB(3000, staleVerifier), /Approval is stale/);
+});
+
+test('Hardening — invalid ISO createdAt in Switch approval is rejected', async () => {
+  const invalidTimeVerifier = fakeVerifier();
+  invalidTimeVerifier.fetchVerifiedMessage = async (ref) => ({
+    serverId: ref.serverId,
+    roomId: ref.roomId,
+    messageId: ref.messageId,
+    humanId: sc().approvalAuthority.approverId,
+    authorKind: 'human',
+    content: budgetApprovalCommand(sc(), byId('plan-b'), 3000),
+    createdAt: 'not-a-timestamp',
+  });
+
+  await assert.rejects(approveB(3000, invalidTimeVerifier), /valid offset ISO/);
+});
+
+test('Hardening — sponsor showcase before kickoff fails SPONSOR_DEADLINE', () => {
+  const plan = byId('plan-b');
+  // Kickoff is 10:00:00+05:30; set showcase to 09:30
+  plan.sponsorShowcaseAt = '2026-11-06T09:30:00+05:30';
+  const result = evaluatePlan(sc(), plan);
+  assert.equal(result.checks.find(c => c.id === 'SPONSOR_DEADLINE')?.status, 'FAIL');
+  assert.match(result.checks.find(c => c.id === 'SPONSOR_DEADLINE')?.message ?? '', /before event kickoff/);
+});
+
+test('Hardening — malformed SwitchMessageReference throws TypeError', async () => {
+  const scenario = sc(); const plan = byId('plan-b');
+  await assert.rejects(
+    verifyBudgetApproval({
+      scenario, plan, maxExtraINR: 3000, verifier: fakeVerifier(),
+      ref: { serverId: '', roomId: 'room:cascade-operations', messageId: '123' },
+    }),
+    /nonempty serverId/
+  );
+  await assert.rejects(
+    verifyBudgetApproval({
+      scenario, plan, maxExtraINR: 3000, verifier: fakeVerifier(),
+      ref: { serverId: 'switch:local-demo', roomId: '', messageId: '123' },
+    }),
+    /nonempty roomId/
+  );
+  await assert.rejects(
+    verifyBudgetApproval({
+      scenario, plan, maxExtraINR: 3000, verifier: fakeVerifier(),
+      ref: { serverId: 'switch:local-demo', roomId: 'room:cascade-operations', messageId: '' },
+    }),
+    /nonempty messageId/
+  );
+});
+
+test('Hardening — tampered existing receipt on disk is detected and rejected', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-tamper-test-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    const receiptPath = join(temp, first.receipt.executionKey, 'receipt.json');
+
+    // Tamper with the receipt on disk (change planHash)
+    const receiptData = JSON.parse(await readFile(receiptPath, 'utf8'));
+    receiptData.planHash = '0000000000000000000000000000000000000000000000000000000000000000';
+    const { writeFile: fsWriteFile } = await import('node:fs/promises');
+    await fsWriteFile(receiptPath, JSON.stringify(receiptData, null, 2) + '\n');
+
+    // Repeated execution must detect the tampering and reject
+    await assert.rejects(applyPlan(input), /does not match plan hash/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Hardening — traceImpact validates scenario and disruption', () => {
+  assert.throws(() => traceImpact(sc(), { id: '', disabledNodeId: '', reportedAt: '', description: '', source: '' }), /disruption\.id/);
+  assert.throws(() => traceImpact(sc(), null as never), /Disruption must be an object/);
+  const badScenario = sc();
+  badScenario.attendees = 0;
+  assert.throws(() => traceImpact(badScenario, FIX.disruption), /Scenario needs attendees/);
 });

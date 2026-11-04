@@ -25,7 +25,8 @@ function capacityChecks(scenario: Scenario, plan: RecoveryPlan): ConstraintCheck
   const problems: { hallId: string; at: string; allocated: number; capacity: number }[] = [];
   for (const hall of scenario.halls) {
     const usage = plan.allocations.filter(a => a.hallId === hall.id);
-    const checkpoints = [...new Set(usage.map(a => a.start))].sort();
+    const checkpoints = [...new Set(usage.map(a => a.start))]
+      .sort((a, b) => (isoMillis(a) ?? 0) - (isoMillis(b) ?? 0));
     for (const at of checkpoints) {
       const t = isoMillis(at)!;
       const allocated = usage
@@ -51,7 +52,7 @@ export function evaluatePlan(scenario: Scenario, plan: RecoveryPlan, approvals: 
     invalidRevision ? 'Plan was made against a different scenario revision' : 'Scenario revision matches plan',
     { planRevision: plan.scenarioRevision, scenarioRevision: scenario.revision }));
 
-  const attendeeHits = new Uint16Array(scenario.attendees);
+  const attendeeHits = new Uint32Array(scenario.attendees);
   const outOfRange: string[] = [];
   for (const [index, a] of plan.allocations.entries()) {
     if (a.attendeeFrom >= scenario.attendees || a.attendeeTo >= scenario.attendees) {
@@ -91,17 +92,27 @@ export function evaluatePlan(scenario: Scenario, plan: RecoveryPlan, approvals: 
     { peakDemand: av.count, availableSupply: avSupply, peakAt: av.time, simultaneousHalls: av.halls }));
 
   const sponsor = isoMillis(plan.sponsorShowcaseAt)!;
-  checks.push(check('SPONSOR_DEADLINE', sponsor >= isoMillis(scenario.sponsorShowcaseBefore)! ? 'FAIL' : 'PASS',
-    sponsor >= isoMillis(scenario.sponsorShowcaseBefore)! ? 'Sponsor showcase occurs after the committed cutoff' : 'Sponsor showcase is scheduled before cutoff',
-    { showcaseAt: plan.sponsorShowcaseAt, deadline: scenario.sponsorShowcaseBefore }));
+  const deadline = isoMillis(scenario.sponsorShowcaseBefore)!;
+  const precedesKickoff = sponsor < kickoff;
+  const exceedsDeadline = sponsor >= deadline;
+  const sponsorOk = !precedesKickoff && !exceedsDeadline;
+  checks.push(check('SPONSOR_DEADLINE', sponsorOk ? 'PASS' : 'FAIL',
+    precedesKickoff
+      ? 'Sponsor showcase is scheduled before event kickoff'
+      : exceedsDeadline
+        ? 'Sponsor showcase occurs after the committed cutoff'
+        : 'Sponsor showcase is scheduled before cutoff',
+    { showcaseAt: plan.sponsorShowcaseAt, kickoffAt: scenario.kickoffAt, deadline: scenario.sponsorShowcaseBefore }));
 
   const projectedCostINR = scenario.baselineCommittedCostINR + plan.rentedAvKits * scenario.avKitRentalCostINR;
   const excessBudgetINR = Math.max(0, projectedCostINR - scenario.baselineBudgetINR);
+  const kickoffTime = isoMillis(scenario.kickoffAt)!;
   const validApproval = approvals.find(a => isVerifiedApproval(a) &&
     a.exceptionType === 'BUDGET_CAP' && a.planHash === hash && a.scenarioId === scenario.id &&
     a.scenarioRevision === scenario.revision && a.switchServerId === scenario.approvalAuthority.serverId &&
     a.switchRoomId === scenario.approvalAuthority.roomId && a.verifiedHumanId === scenario.approvalAuthority.approverId &&
-    a.maxExtraINR >= excessBudgetINR);
+    Number.isSafeInteger(a.maxExtraINR) && a.maxExtraINR >= excessBudgetINR &&
+    isoMillis(a.verifiedAt) !== null && isoMillis(a.verifiedAt)! <= kickoffTime);
   const status = excessBudgetINR === 0 || validApproval ? 'PASS' : 'REQUIRES_APPROVAL';
   checks.push(check('BUDGET_CAP', status, status === 'PASS' ? 'Budget authorization satisfied' : `INR ${excessBudgetINR} exception requires verified human approval in Switch`,
     { projectedCostINR, baselineCapINR: scenario.baselineBudgetINR, excessBudgetINR, approvalMessageId: validApproval?.approvalMessageId ?? null }));

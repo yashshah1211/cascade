@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { ExecutionReceipt, RecoveryPlan, Scenario } from '../domain/types.js';
-import { planHash } from '../domain/validate.js';
+import { planHash, validatePlan, validateScenario } from '../domain/validate.js';
 import { evaluatePlan } from './evaluate.js';
 import { isVerifiedApproval, type VerifiedApproval } from '../switch/approval.js';
 
@@ -16,6 +16,8 @@ export async function applyPlan(input: {
   outputRoot: string;
 }): Promise<{ receipt: ExecutionReceipt; alreadyApplied: boolean }> {
   const { scenario, plan, trustedApprovals } = input;
+  validateScenario(scenario);
+  validatePlan(plan, scenario);
   const report = evaluatePlan(scenario, plan, trustedApprovals);
   if (report.verdict !== 'PASS') throw new Error(`Cannot execute ${plan.id}: ${report.verdict}`);
   const hash = planHash(scenario, plan);
@@ -28,13 +30,25 @@ export async function applyPlan(input: {
     if (e.code === 'ENOENT') return null;
     throw e;
   });
-  if (existing) return { receipt: JSON.parse(existing) as ExecutionReceipt, alreadyApplied: true };
+  if (existing) {
+    const existingReceipt = JSON.parse(existing) as ExecutionReceipt;
+    if (existingReceipt.planHash !== hash || existingReceipt.scenarioRevision !== scenario.revision || existingReceipt.scenarioId !== scenario.id) {
+      throw new Error(`Existing execution receipt at ${executionKey} does not match plan hash or scenario revision`);
+    }
+    return { receipt: existingReceipt, alreadyApplied: true };
+  }
 
   const approval = trustedApprovals.find(a => isVerifiedApproval(a) &&
+    a.exceptionType === 'BUDGET_CAP' &&
     a.scenarioId === scenario.id && a.scenarioRevision === scenario.revision &&
     a.planHash === hash && a.verifiedHumanId === scenario.approvalAuthority.approverId &&
     a.switchRoomId === scenario.approvalAuthority.roomId && a.switchServerId === scenario.approvalAuthority.serverId &&
     a.maxExtraINR >= report.excessBudgetINR);
+
+  if (report.excessBudgetINR > 0 && !approval) {
+    throw new Error(`Cannot execute ${plan.id}: missing verified approval for excess budget INR ${report.excessBudgetINR}`);
+  }
+
   const actions: ExecutionReceipt['actions'] = [
     { artifact: 'schedule.json', status: 'applied-locally' },
     { artifact: 'assignments.json', status: 'applied-locally' },
@@ -75,7 +89,12 @@ export async function applyPlan(input: {
   } catch (e) {
     await rm(staging, { recursive: true, force: true }).catch(() => {});
     const concurrent = await readFile(receiptFile, 'utf8').catch(() => null);
-    if (concurrent) return { receipt: JSON.parse(concurrent) as ExecutionReceipt, alreadyApplied: true };
+    if (concurrent) {
+      const concurrentReceipt = JSON.parse(concurrent) as ExecutionReceipt;
+      if (concurrentReceipt.planHash === hash && concurrentReceipt.scenarioRevision === scenario.revision && concurrentReceipt.scenarioId === scenario.id) {
+        return { receipt: concurrentReceipt, alreadyApplied: true };
+      }
+    }
     throw e;
   }
   return { receipt, alreadyApplied: false };

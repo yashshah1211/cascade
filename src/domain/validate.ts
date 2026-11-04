@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { Allocation, RecoveryPlan, Scenario } from './types.js';
+import type { Allocation, Disruption, RecoveryPlan, Scenario } from './types.js';
 
 /** Stable canonical JSON so plan identities are independent of object key ordering. */
 export function canonical(value: unknown): string {
@@ -30,6 +30,13 @@ function nonnegativeInt(value: unknown, label: string): asserts value is number 
   if (!Number.isSafeInteger(value) || (value as number) < 0) throw new TypeError(`${label}: expected nonnegative integer`);
 }
 
+export function validateDisruption(input: unknown): asserts input is Disruption {
+  if (!input || typeof input !== 'object') throw new TypeError('Disruption must be an object');
+  const d = input as Record<string, unknown>;
+  for (const k of ['id', 'disabledNodeId', 'reportedAt', 'description', 'source']) requiredString(d[k], `disruption.${k}`);
+  if (isoMillis(d.reportedAt as string) === null) throw new TypeError('disruption.reportedAt: ISO offset required');
+}
+
 export function validateScenario(input: unknown): asserts input is Scenario {
   if (!input || typeof input !== 'object') throw new TypeError('Scenario must be an object');
   const s = input as Record<string, unknown>;
@@ -50,21 +57,74 @@ export function validateScenario(input: unknown): asserts input is Scenario {
   }
   if (!Array.isArray(s.commitments) || s.commitments.length < 7) throw new TypeError('At least 7 commitments required');
   const ids = new Set<string>();
+  const commitmentMap = new Map<string, Record<string, unknown>>();
   for (const item of s.commitments as unknown[]) {
     if (!item || typeof item !== 'object') throw new TypeError('commitment invalid');
     const c = item as Record<string, unknown>;
     for (const k of ['id','description','beneficiary','owner','approver','dueAt','provenance']) requiredString(c[k], `commitment.${k}`);
     if (ids.has(c.id as string)) throw new TypeError(`duplicate commitment ${c.id}`);
     ids.add(c.id as string);
+    commitmentMap.set(c.id as string, c);
     if (c.classification !== 'hard' && c.classification !== 'negotiable') throw new TypeError('invalid classification');
     if (isoMillis(c.dueAt as string) === null) throw new TypeError('invalid commitment dueAt');
     if (!Array.isArray(c.dependencies)) throw new TypeError('missing dependencies');
+  }
+
+  const validVenues = new Set<string>([s.originalVenueId as string, ...hallIds]);
+  for (const [id, c] of commitmentMap.entries()) {
+    const seenPrereqs = new Set<string>();
     for (const d of c.dependencies as unknown[]) {
       if (!d || typeof d !== 'object') throw new TypeError('dependency invalid');
-      requiredString((d as Record<string, unknown>).prerequisiteId, 'dependency.prerequisiteId');
-      if (!['requires', 'enables', 'scheduled-at'].includes(String((d as Record<string, unknown>).kind))) throw new TypeError('invalid dependency kind');
+      const prereqId = (d as Record<string, unknown>).prerequisiteId;
+      requiredString(prereqId, 'dependency.prerequisiteId');
+      if (!['requires', 'enables', 'scheduled-at'].includes(String((d as Record<string, unknown>).kind))) {
+        throw new TypeError('invalid dependency kind');
+      }
+      if (prereqId === id) {
+        throw new TypeError(`Self-dependency detected: commitment ${id} cannot depend on itself`);
+      }
+      if (seenPrereqs.has(prereqId)) {
+        throw new TypeError(`Duplicate dependency detected in commitment ${id} for prerequisite ${prereqId}`);
+      }
+      seenPrereqs.add(prereqId);
+
+      if (prereqId.startsWith('commitment:') && !ids.has(prereqId)) {
+        throw new TypeError(`Missing dependency: commitment ${id} references nonexistent commitment ${prereqId}`);
+      }
+      if (prereqId.startsWith('venue:') && !validVenues.has(prereqId)) {
+        throw new TypeError(`Missing dependency: commitment ${id} references unknown venue ${prereqId}`);
+      }
     }
   }
+
+  // Cyclic dependency check across commitments using DFS
+  const visitState = new Map<string, number>(); // 0: unvisited, 1: visiting, 2: visited
+  function detectCycle(nodeId: string, stack: string[]): void {
+    visitState.set(nodeId, 1);
+    const comm = commitmentMap.get(nodeId);
+    if (comm) {
+      for (const d of (comm.dependencies as Array<{ prerequisiteId: string }>)) {
+        const prereq = d.prerequisiteId;
+        if (!ids.has(prereq)) continue;
+        const state = visitState.get(prereq) ?? 0;
+        if (state === 1) {
+          const cyclePath = [...stack, prereq].join(' -> ');
+          throw new TypeError(`Cyclic dependency detected among commitments: ${cyclePath}`);
+        }
+        if (state === 0) {
+          detectCycle(prereq, [...stack, prereq]);
+        }
+      }
+    }
+    visitState.set(nodeId, 2);
+  }
+
+  for (const id of ids) {
+    if ((visitState.get(id) ?? 0) === 0) {
+      detectCycle(id, [id]);
+    }
+  }
+
   if (!s.approvalAuthority || typeof s.approvalAuthority !== 'object') throw new TypeError('missing approvalAuthority');
   for (const k of ['approverId','serverId','roomId']) requiredString((s.approvalAuthority as Record<string, unknown>)[k], `approvalAuthority.${k}`);
 }
