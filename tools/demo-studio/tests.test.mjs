@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import {
   EVIDENCE, APPROVAL_COMMAND, assertLocalMattermostURL, assertPostId,
   verifyMattermostEvidence, loadVerifiedArtifacts,
-  extractVerifiedAcpTranscript, safeHtml, assertWithin,
+  extractVerifiedAcpTranscript, inspectAcpShape, safeHtml, assertWithin,
 } from './lib.mjs';
 import { sceneHtml } from './render.mjs';
 
@@ -263,4 +263,47 @@ test('Demo: rejects bad local JSON with filename-only error instead of leaking c
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test('Demo: ACP safe inspection reports only allowlisted field types, never private values', () => {
+  const raw = [
+    {
+      step_index: 107,
+      source: 'AGENT',
+      type: 'SOMETHING_DIFFERENT',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: 'cascade_execute_recovery', Arguments: EVIDENCE.approvalPost },
+      }],
+      private_password: 'TOP_SECRET_DO_NOT_ECHO',
+    },
+    {
+      step_index: 108,
+      source: 'RPC',
+      type: 'TOOL_RESULT_V2',
+      content: { success: true, token: 'PERSONAL_SECRET_TOKEN' },
+      untrusted_message: 'THIS_SHOULD_NOT_BE_SHARED',
+    },
+  ].map(JSON.stringify).join('\n');
+  const report = inspectAcpShape(raw);
+  assert.equal(report.step107.present, true);
+  assert.equal(report.step108.present, true);
+  assert.equal(report.step107.toolCallCount, 1);
+  assert.equal(report.step107.sourceRole, 'other-or-unset');
+  const serialized = JSON.stringify(report);
+  assert.ok(!serialized.includes('TOP_SECRET_DO_NOT_ECHO'));
+  assert.ok(!serialized.includes('PERSONAL_SECRET_TOKEN'));
+  assert.ok(!serialized.includes('THIS_SHOULD_NOT_BE_SHARED'));
+  assert.ok(!serialized.includes(EVIDENCE.approvalPost));
+});
+
+test('Demo: ACP safe inspection never returns raw transcript on malformed lines', () => {
+  const raw = '{ bad-json SECRET\n' + JSON.stringify({
+    step_index: 107, source: 'MODEL', tool_calls: [],
+  });
+  const report = inspectAcpShape(raw);
+  assert.equal(report.step107.sourceRole, 'model');
+  assert.deepEqual(report.step108, { present: false });
+  assert.ok(!JSON.stringify(report).includes('SECRET'));
 });
