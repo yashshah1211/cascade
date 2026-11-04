@@ -106,7 +106,6 @@ test('MattermostMessageVerifier: successfully verifies genuine human message wit
     serverId: scenarioFixture.approvalAuthority.serverId,
     userMap: {
       [userId]: scenarioFixture.approvalAuthority.approverId,
-      organizer: scenarioFixture.approvalAuthority.approverId,
     },
     roomMap: {
       [channelId]: scenarioFixture.approvalAuthority.roomId,
@@ -303,4 +302,274 @@ test('createProductionSwitchVerifier: unconfigured vs configured behavior', asyn
     fetchFn: createMockFetch({ post: { status: 404 } }),
   });
   assert.ok(conf instanceof MattermostMessageVerifier);
+});
+
+test('Security: userMap rejects generic usernames in constructor', () => {
+  for (const generic of ['user', 'admin', 'root', 'administrator', 'guest', 'owner']) {
+    assert.throws(
+      () => new MattermostMessageVerifier({
+        baseUrl: 'http://localhost:59113',
+        token: 'test-tok',
+        userMap: { [generic]: 'human:organizer-owner' },
+      }),
+      /userMap keys must be exact account IDs, not generic usernames/
+    );
+  }
+});
+
+test('Security: generic username fallback is completely removed', async () => {
+  const postId = 'post-unmapped-user';
+  const realUserId = 'actual-account-id-456';
+  const mockFetch = createMockFetch({
+    post: {
+      status: 200,
+      body: {
+        id: postId,
+        user_id: realUserId,
+        channel_id: 'chan-1',
+        message: budgetApprovalCommand(scenarioFixture, planB, 3000),
+        create_at: new Date('2026-11-05T15:00:00.000Z').getTime(),
+        props: {},
+      },
+    },
+    user: {
+      status: 200,
+      body: {
+        id: realUserId,
+        username: 'authorized_organizer',
+        is_bot: false,
+      },
+    },
+  });
+
+  // userMap only has a different account ID
+  const verifier = new MattermostMessageVerifier({
+    baseUrl: 'http://localhost:59113',
+    token: 'test-token',
+    serverId: scenarioFixture.approvalAuthority.serverId,
+    userMap: {
+      'different-account-id-789': scenarioFixture.approvalAuthority.approverId,
+    },
+    roomMap: {
+      'chan-1': scenarioFixture.approvalAuthority.roomId,
+    },
+    fetchFn: mockFetch,
+  });
+
+  const verified = await verifier.fetchVerifiedMessage({
+    serverId: scenarioFixture.approvalAuthority.serverId,
+    roomId: scenarioFixture.approvalAuthority.roomId,
+    messageId: postId,
+  });
+
+  assert.ok(verified);
+  // HumanId must be the unmapped realUserId, NOT mapped via username
+  assert.equal(verified.humanId, realUserId);
+  assert.notEqual(verified.humanId, scenarioFixture.approvalAuthority.approverId);
+
+  // Approval must fail closed because humanId does not match authority
+  await assert.rejects(
+    () => verifyBudgetApproval({
+      scenario: scenarioFixture,
+      plan: planB,
+      maxExtraINR: 3000,
+      ref: {
+        serverId: scenarioFixture.approvalAuthority.serverId,
+        roomId: scenarioFixture.approvalAuthority.roomId,
+        messageId: postId,
+      },
+      verifier,
+    }),
+    /Only the designated human owner can authorize a recovery exception/
+  );
+});
+
+test('Security: rejects string and numeric forms of is_bot and system_bot role', async () => {
+  for (const botVal of ['true', 'TRUE', '1', 1]) {
+    const mockFetch = createMockFetch({
+      post: {
+        status: 200,
+        body: {
+          id: 'post-bot-val',
+          user_id: 'bot-account-id',
+          channel_id: 'chan-1',
+          message: budgetApprovalCommand(scenarioFixture, planB, 3000),
+          create_at: new Date('2026-11-05T15:00:00.000Z').getTime(),
+          props: {},
+        },
+      },
+      user: {
+        status: 200,
+        body: {
+          id: 'bot-account-id',
+          username: 'bot-user',
+          is_bot: botVal,
+        },
+      },
+    });
+
+    const verifier = new MattermostMessageVerifier({
+      baseUrl: 'http://localhost:59113',
+      token: 'test-token',
+      serverId: scenarioFixture.approvalAuthority.serverId,
+      roomMap: { 'chan-1': scenarioFixture.approvalAuthority.roomId },
+      fetchFn: mockFetch,
+    });
+
+    const verified = await verifier.fetchVerifiedMessage({
+      serverId: scenarioFixture.approvalAuthority.serverId,
+      roomId: scenarioFixture.approvalAuthority.roomId,
+      messageId: 'post-bot-val',
+    });
+    assert.ok(verified);
+    assert.equal(verified.authorKind, 'agent');
+  }
+
+  // Also test system_bot role
+  const mockFetchRole = createMockFetch({
+    post: {
+      status: 200,
+      body: {
+        id: 'post-bot-role',
+        user_id: 'bot-role-id',
+        channel_id: 'chan-1',
+        message: budgetApprovalCommand(scenarioFixture, planB, 3000),
+        create_at: new Date('2026-11-05T15:00:00.000Z').getTime(),
+        props: {},
+      },
+    },
+    user: {
+      status: 200,
+      body: {
+        id: 'bot-role-id',
+        username: 'bot-user',
+        roles: 'system_user system_bot',
+      },
+    },
+  });
+
+  const verifierRole = new MattermostMessageVerifier({
+    baseUrl: 'http://localhost:59113',
+    token: 'test-token',
+    serverId: scenarioFixture.approvalAuthority.serverId,
+    roomMap: { 'chan-1': scenarioFixture.approvalAuthority.roomId },
+    fetchFn: mockFetchRole,
+  });
+
+  const verifiedRole = await verifierRole.fetchVerifiedMessage({
+    serverId: scenarioFixture.approvalAuthority.serverId,
+    roomId: scenarioFixture.approvalAuthority.roomId,
+    messageId: 'post-bot-role',
+  });
+  assert.ok(verifiedRole);
+  assert.equal(verifiedRole.authorKind, 'agent');
+});
+
+test('Security: rejects boolean, string, and numeric forms of props flags and username overrides', async () => {
+  const testPropsCases: Record<string, unknown>[] = [
+    { from_bot: true },
+    { from_bot: 'true' },
+    { from_bot: '1' },
+    { from_webhook: true },
+    { from_webhook: 'true' },
+    { from_webhook: '1' },
+    { override_username: 'custom_spoofed_bot' },
+    { override_username: true },
+    { override_username: 'true' },
+    { webhook_display_name: 'Webhook Poster' },
+  ];
+
+  for (const props of testPropsCases) {
+    const mockFetch = createMockFetch({
+      post: {
+        status: 200,
+        body: {
+          id: 'post-prop-check',
+          user_id: 'human-user-id',
+          channel_id: 'chan-1',
+          message: budgetApprovalCommand(scenarioFixture, planB, 3000),
+          create_at: new Date('2026-11-05T15:00:00.000Z').getTime(),
+          props,
+        },
+      },
+      user: {
+        status: 200,
+        body: {
+          id: 'human-user-id',
+          username: 'human_lookalike',
+          is_bot: false,
+        },
+      },
+    });
+
+    const verifier = new MattermostMessageVerifier({
+      baseUrl: 'http://localhost:59113',
+      token: 'test-token',
+      serverId: scenarioFixture.approvalAuthority.serverId,
+      roomMap: { 'chan-1': scenarioFixture.approvalAuthority.roomId },
+      fetchFn: mockFetch,
+    });
+
+    const verified = await verifier.fetchVerifiedMessage({
+      serverId: scenarioFixture.approvalAuthority.serverId,
+      roomId: scenarioFixture.approvalAuthority.roomId,
+      messageId: 'post-prop-check',
+    });
+    assert.ok(verified);
+    assert.equal(verified.authorKind, 'agent');
+  }
+});
+
+test('Security: strictly rejects mismatched server and unmapped channels', async () => {
+  const mockFetch = createMockFetch({
+    post: {
+      status: 200,
+      body: {
+        id: 'post-chan-check',
+        user_id: 'human-user-id',
+        channel_id: 'unmapped-channel-999',
+        message: budgetApprovalCommand(scenarioFixture, planB, 3000),
+        create_at: new Date('2026-11-05T15:00:00.000Z').getTime(),
+        props: {},
+      },
+    },
+    user: {
+      status: 200,
+      body: {
+        id: 'human-user-id',
+        username: 'human_owner',
+        is_bot: false,
+      },
+    },
+  });
+
+  const verifier = new MattermostMessageVerifier({
+    baseUrl: 'http://localhost:59113',
+    token: 'test-token',
+    serverId: 'server:switch-local',
+    roomMap: {
+      'authorized-channel-123': scenarioFixture.approvalAuthority.roomId,
+    },
+    fetchFn: mockFetch,
+  });
+
+  // Mismatched serverId (e.g. attempting to pass baseUrl instead of serverId)
+  assert.equal(
+    await verifier.fetchVerifiedMessage({
+      serverId: 'http://localhost:59113',
+      roomId: scenarioFixture.approvalAuthority.roomId,
+      messageId: 'post-chan-check',
+    }),
+    null
+  );
+
+  // Mismatched channel (message was in unmapped channel)
+  assert.equal(
+    await verifier.fetchVerifiedMessage({
+      serverId: 'server:switch-local',
+      roomId: scenarioFixture.approvalAuthority.roomId,
+      messageId: 'post-chan-check',
+    }),
+    null
+  );
 });

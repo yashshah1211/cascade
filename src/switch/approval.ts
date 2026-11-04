@@ -111,12 +111,32 @@ export interface MattermostVerifierConfig {
   readonly token: string;
   /** Logical serverId to match ref.serverId (defaults to baseUrl or configured serverId) */
   readonly serverId?: string;
-  /** Map Mattermost userId or username to canonical humanId (e.g. "human:organizer-owner") */
+  /** Map Mattermost userId (exact account ID) to canonical humanId (e.g. "human:organizer-owner"). Generic usernames are rejected. */
   readonly userMap?: Readonly<Record<string, string>>;
-  /** Map Mattermost channelId or name to canonical roomId (e.g. "room:cascade-operations") */
+  /** Map Mattermost channelId to canonical roomId (e.g. "room:cascade-operations") */
   readonly roomMap?: Readonly<Record<string, string>>;
   /** Optional custom fetch implementation for testing */
   readonly fetchFn?: typeof fetch;
+}
+
+const DISALLOWED_GENERIC_USERNAMES = new Set([
+  'user',
+  'admin',
+  'root',
+  'administrator',
+  'guest',
+  'owner',
+  'operator',
+  'system',
+]);
+
+function isTruthyFlag(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes';
+  }
+  return false;
 }
 
 /**
@@ -139,6 +159,14 @@ export class MattermostMessageVerifier implements SwitchMessageVerifier {
     if (typeof config.token !== 'string' || !config.token.trim())
       throw new TypeError('Mattermost token must be a nonempty string');
 
+    if (config.userMap && typeof config.userMap === 'object') {
+      for (const key of Object.keys(config.userMap)) {
+        if (DISALLOWED_GENERIC_USERNAMES.has(key.toLowerCase().trim())) {
+          throw new TypeError(`userMap keys must be exact account IDs, not generic usernames like "${key}"`);
+        }
+      }
+    }
+
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
     this.token = config.token.trim();
     this.serverId = config.serverId?.trim() || this.baseUrl;
@@ -153,8 +181,8 @@ export class MattermostMessageVerifier implements SwitchMessageVerifier {
     if (typeof ref.serverId !== 'string' || !ref.serverId.trim()) return null;
     if (typeof ref.roomId !== 'string' || !ref.roomId.trim()) return null;
 
-    // Server verification: must match configured serverId or baseUrl
-    if (ref.serverId !== this.serverId && ref.serverId !== this.baseUrl) {
+    // Server verification: must strictly match configured serverId
+    if (ref.serverId !== this.serverId) {
       return null;
     }
 
@@ -182,10 +210,10 @@ export class MattermostMessageVerifier implements SwitchMessageVerifier {
         return null;
       }
 
-      // 2. Room verification: channel must match ref.roomId (or via roomMap)
-      const canonicalRoom = this.roomMap[post.channel_id] ?? post.channel_id;
-      const targetRoom = this.roomMap[ref.roomId] ?? ref.roomId;
-      if (post.channel_id !== ref.roomId && canonicalRoom !== ref.roomId && post.channel_id !== targetRoom) {
+      // 2. Room verification: channel must strictly match ref.roomId (via roomMap if configured)
+      const hasRoomMap = Object.keys(this.roomMap).length > 0;
+      const canonicalRoom = hasRoomMap ? this.roomMap[post.channel_id] : post.channel_id;
+      if (canonicalRoom !== ref.roomId) {
         return null;
       }
 
@@ -202,26 +230,32 @@ export class MattermostMessageVerifier implements SwitchMessageVerifier {
       const user = (await userResp.json()) as {
         id?: string;
         username?: string;
-        is_bot?: boolean;
+        is_bot?: boolean | string | number;
         roles?: string;
       };
 
       if (!user || user.id !== post.user_id) return null;
 
-      // Determine authorKind (enforce that bots, webhook overrides, and integrations are 'agent')
+      // Determine authorKind (strictly enforce that bots, webhooks, and override usernames are 'agent')
       const isBot =
-        user.is_bot === true ||
-        post.props?.from_bot === 'true' ||
-        post.props?.from_webhook === 'true' ||
-        Boolean(post.props?.override_username);
+        isTruthyFlag(user.is_bot) ||
+        (typeof user.roles === 'string' && user.roles.split(/\s+/).includes('system_bot')) ||
+        (post.props !== undefined && (
+          isTruthyFlag(post.props.from_bot) ||
+          isTruthyFlag(post.props.from_webhook) ||
+          (post.props.override_username !== undefined &&
+           post.props.override_username !== null &&
+           post.props.override_username !== '' &&
+           post.props.override_username !== false) ||
+          (post.props.webhook_display_name !== undefined &&
+           post.props.webhook_display_name !== null &&
+           post.props.webhook_display_name !== '')
+        ));
 
       const authorKind: 'human' | 'agent' = isBot ? 'agent' : 'human';
 
-      // Map humanId if configured
-      const humanId =
-        this.userMap[user.id] ??
-        (user.username ? this.userMap[user.username] : undefined) ??
-        user.id;
+      // Map humanId strictly by exact authenticated account ID (never by username)
+      const humanId = this.userMap[user.id] ?? user.id;
 
       const createdAt = typeof post.create_at === 'number'
         ? new Date(post.create_at).toISOString()
