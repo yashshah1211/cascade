@@ -195,9 +195,9 @@ export async function executeVerifiedRecovery(params: {
     outputRoot,
   });
 
-  // 4. Post receipt back to channel if requested
+  // 4. Post receipt back to channel if requested and not already applied
   let receiptPost: CollaborationPostResult | undefined;
-  if (postReceiptToChannel) {
+  if (postReceiptToChannel && !alreadyApplied) {
     receiptPost = await postExecutionReceipt({
       receipt,
       channelId,

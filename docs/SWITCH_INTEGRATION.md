@@ -6,12 +6,12 @@ This document records the architecture, security boundary, live integration veri
 
 ## 1. Executive Summary & Verification State
 
-- **Workflow State:** Verified Genuine Human-in-the-Loop Collaboration Architecture (Mission 02D Completed).
+- **Workflow State:** Verified Genuine Human-in-the-Loop Collaboration Architecture (Mission 02E Completed).
 - **Engine Authorization Boundary:** Fail-closed. Untrusted inputs, unauthenticated messages, bot accounts, webhooks, and mismatched rooms or servers are strictly rejected.
 - **Human Approval Verification:** Real human approval personally submitted by the authorized event owner (`oh47xmfeafyapbjyhhri6bucae`) in Mattermost Town Square (Post ID: `w7gx4ku4ybdtirmhs36feexciw`).
 - **Deterministic Execution:** Real recovery execution performed by `executeVerifiedRecovery` with receipt state `APPLIED_LOCALLY`.
-- **Receipt Notification:** Execution receipt posted to Mattermost Town Square thread (Post ID: `d41a43t9rtnyid9ho3dhjyfy8o`).
-- **Automated Test Suite:** 56/56 passing tests across unit, security regression, artifact integrity, and live verifier suites.
+- **Receipt Notification:** Execution receipt posted to Mattermost Town Square thread (Post ID: `d41a43t9rtnyid9ho3dhjyfy8o`). Replay execution verifies existing artifacts, returns `alreadyApplied: true`, and suppresses duplicate receipt notifications.
+- **Automated Test Suite:** 56/56 passing tests across unit, security regression, artifact integrity, live verifier, and idempotent collaboration suites.
 - **Execution Safeguards:** Local artifacts only (`APPLIED_LOCALLY`). External actions (venue booking, supplier purchase, broadcast notification) remain non-executable drafts (`# Drafts only — NOT SENT`).
 - **Security Hotfix:** All previously exposed tokens have been revoked in PostgreSQL `useraccesstokens` and active `sessions`. Both old tokens are confirmed to return HTTP 401 Unauthorized. No secrets or tokens are stored in tracked repository files.
 
@@ -42,6 +42,7 @@ To prevent automated self-authorization, CASCADE requires that any recovery plan
 [CASCADE Engine] ──(applyPlan)──> [Fresh Artifacts: artifacts/event-430-recovery-live/]
        │
 [CASCADE Engine] ──(postExecutionReceipt)──> [Mattermost: Town Square Thread]
+                                             (Suppressed on idempotent re-runs)
 ```
 
 ### Authorization Command Syntax
@@ -80,7 +81,7 @@ To independently verify that no active unauthorized tokens remain on the account
 
 ### Runtime Agent Configuration
 - **Runtime Agent**: Google Antigravity ACP (`agy_acp_server.exe` / `gemini-3.8-flash`) connected via Switch Console ACP driver.
-- **Agent Instructions**: Configured with strict operational bounds for CASCADE event-430 evaluation and recovery execution. Broad filesystem searches and premature status declarations are explicitly forbidden.
+- **Agent Instructions (Revision 9)**: Configured with strict operational bounds for CASCADE event-430 evaluation and recovery execution. Broad filesystem searches and premature status declarations are explicitly forbidden.
 
 ---
 
@@ -105,7 +106,7 @@ In response to independent review findings, `src/switch/approval.ts` was hardene
 
 ---
 
-## 6. Mission 02D — Human-Approved Execution Recovery & Turn Failure Analysis
+## 6. Mission 02D & 02E — Execution Recovery, Turn Failure RCA, and Switch Integration
 
 ### A. Forensic Analysis of the Failed Switch Turn
 
@@ -120,14 +121,24 @@ Following the owner's submission of the genuine approval command, the Switch age
    This recursive crawl across `C:\Users\yashs` timed out and was aborted, registering as the single failed tool call.
 3. **Premature Status Declaration:** Before the recovery engine was executed, the agent hallucinated a status response declaring *"Status: ACTIVE / COMMITTED"*. This violated the core security premise that human authorization is a prerequisite for execution, not execution itself.
 
-### B. Engineering Corrections
+### B. Engineering Corrections (Mission 02E)
 
-1. **Native Switch Operation Integration:**
-   Registered `@operation cascade_execute_recovery(approval_message_id: str, output_dir: str = "artifacts/event-430-recovery-live")` in `switch_core` and exposed its MCP schema to the agent:
-   - Target binary: `node dist/src/cli/main.js recover --approval-msg <id> --output-dir <dir>`
-   - Working directory: `C:\Users\yashs\Downloads\CASCADE_Day1_MVP_2026-11-04\cascade`
-   - Executes with fail-closed verification of the human message.
-2. **Hardened Prompt & Operational Constraints (Revision 9):**
+1. **Correct Executable Target:**
+   The registered `cascade_execute_recovery` operation invokes the standalone recovery entrypoint:
+   ```text
+   node dist/src/cli/recover.js --approval-msg <id> --output-dir <dir>
+   ```
+   (`main.js` only handles `demo` and `inspect`; `recover.js` is the designated recovery CLI).
+2. **Subprocess Exit Code Check & Failure Propagation:**
+   `cascade_execute_recovery` checks `proc.returncode`. If non-zero, it raises `ValueError`, which FastAPI translates to `HTTP 400 Bad Request` with exact stderr/stdout details, ensuring failures propagate fail-closed to Switch and ACP callers even when the HTTP gateway remains healthy.
+3. **Tool Input Constraints:**
+   - `approval_message_id`: Constrained strictly via regex `^[a-z0-9]{26}$` (Mattermost 26-char lowercase alphanumeric post ID).
+   - `output_dir`: Constrained to approved directory `artifacts/event-430-recovery-live`. Path traversal (`..`) is strictly prohibited.
+4. **Idempotence & Duplicate Notification Suppression:**
+   - In `src/switch/collaboration.ts`, `executeVerifiedRecovery` checks `postReceiptToChannel && !alreadyApplied`.
+   - On replay, `applyPlan` verifies on-disk artifact integrity and returns `alreadyApplied: true`.
+   - The CLI logs the idempotent replay and **does not publish duplicate receipt notifications** to Mattermost.
+5. **Hardened Prompt & Operational Constraints (Revision 9):**
    Updated `switch-buddy-admin` instructions to:
    - Forbid recursive and broad directory scans; repository location is strictly fixed.
    - Forbid declaring any plan "ACTIVE / COMMITTED" prior to engine receipt generation.
@@ -146,62 +157,91 @@ The approval was verified through the authenticated Mattermost API by `Mattermos
   ```
 - **Post Timestamp:** `1793812404513` (`2026-11-04T17:13:24.513Z`), preceding synthetic event kickoff (`2026-11-06T10:00:00+05:30`).
 
-### D. Recovery Execution & Artifact Evidence
+### D. Distinct Execution Milestones
 
-The deterministic recovery engine executed against the verified approval message:
+#### Milestone 1: Direct Engine Local Execution
+The deterministic recovery CLI executed against the verified approval:
 - **CLI Command:**
   ```powershell
   npm run recover -- --approval-msg w7gx4ku4ybdtirmhs36feexciw --output-dir artifacts/event-430-recovery-live
   ```
-- **Generated Artifact Directory:**
-  `artifacts/event-430-recovery-live/event-430-1ddfdd0f2ccda8d1f9891627/`
-- **Generated Artifacts:**
-  1. `receipt.json`:
-     - `planHash`: `1ddfdd0f2ccda8d1f9891627f5e51e8d86a946d54460a9cd18a1e16bc22ad0da`
-     - `state`: `APPLIED_LOCALLY`
-     - `approvalMessageId`: `switch:switch:local-demo:room:cascade-operations:w7gx4ku4ybdtirmhs36feexciw`
-     - `projectedCostINR`: `83000` (baseline ₹80,000 + ₹3,000 approved exception)
-     - `note`: `Local artifacts written. No external venue booking, supplier purchase, or stakeholder notification performed.`
-  2. `schedule.json`:
-     - Hall A: 250 attendees (0–249), 10:00–10:45, 1 AV kit.
-     - Hall B: 180 attendees (250–429), 10:00–10:45, 1 AV kit.
-  3. `assignments.json`:
-     - 430 total attendees assigned without duplicates or gaps.
-  4. `stakeholder-messages.md`:
-     - Marked `# Drafts only — NOT SENT` across all draft communications.
-- **Mattermost Receipt Notification:**
-  - Real execution receipt posted to Town Square: Post ID `d41a43t9rtnyid9ho3dhjyfy8o` (reply under root thread `g4aqigppjtgw9f4jqbajbu5xxa`).
+- **Initial Execution Receipt:** Posted to Mattermost Town Square: Post ID `d41a43t9rtnyid9ho3dhjyfy8o` (reply under thread `g4aqigppjtgw9f4jqbajbu5xxa`).
+
+#### Milestone 2: Antigravity ACP Switch Tool Execution
+The Antigravity ACP agent executes the recovery via Switch tool `cascade_execute_recovery`:
+- **API Call:** `POST /agents/56911d08-ca1d-4e80-8812-9c77e3852dc9/ops/cascade_execute_recovery`
+- **Payload:** `{"approval_message_id": "w7gx4ku4ybdtirmhs36feexciw", "output_dir": "artifacts/event-430-recovery-live"}`
+- **Subprocess Exit Code:** `0` (`success: true`)
+- **Replay State:** `Already Applied: true` (intact artifact validation passed).
+- **Duplicate Suppression:** Zero duplicate messages published to Mattermost.
+
+### E. Execution Receipt & Artifact Schema Verification
+
+**Generated Artifact Directory:**
+`artifacts/event-430-recovery-live/event-430-1ddfdd0f2ccda8d1f9891627/`
+
+1. **`receipt.json` Schema:**
+   ```json
+   {
+     "executionKey": "event-430-1ddfdd0f2ccda8d1f9891627",
+     "scenarioId": "event-430",
+     "scenarioRevision": 1,
+     "planId": "plan-b",
+     "planHash": "1ddfdd0f2ccda8d1f9891627f5e51e8d86a946d54460a9cd18a1e16bc22ad0da",
+     "state": "APPLIED_LOCALLY",
+     "actions": [
+       { "artifact": "schedule.json", "status": "applied-locally" },
+       { "artifact": "assignments.json", "status": "applied-locally" },
+       { "artifact": "stakeholder-messages.md", "status": "drafted" }
+     ],
+     "humanApprovalEvidence": {
+       "switchRoomId": "room:cascade-operations",
+       "approvalMessageId": "w7gx4ku4ybdtirmhs36feexciw"
+     },
+     "note": "Local artifacts only. No actual venue booking, supplier purchase, or stakeholder notification."
+   }
+   ```
+   *Note: `humanApprovalEvidence.approvalMessageId` strictly contains the raw Mattermost post ID (`w7gx4ku4ybdtirmhs36feexciw`).*
+
+2. **`schedule.json` Schema:**
+   - Hall A: 250 attendees (0–249), 10:00–10:45, 1 AV kit.
+   - Hall B: 180 attendees (250–429), 10:00–10:45, 1 AV kit.
+   - `sponsorShowcaseAt`: `2026-11-06T11:00:00+05:30`
+   - `projectedCostINR`: `83000` (baseline ₹80,000 + ₹3,000 approved exception).
+3. **`assignments.json` Schema:**
+   - 430 total attendees assigned across Hall A and Hall B with zero gaps or overlaps.
+4. **`stakeholder-messages.md` Schema:**
+   - Marked `# Drafts only — NOT SENT` across all draft communications.
+   - Explicit disclaimer: `This message has not been sent.`
 
 ---
 
-## 7. Local Installation Modifications & Reversal Guide
+## 7. Reproducible Integration Setup & Reversal Guide
 
-To establish the running Switch and Mattermost collaboration environment, bounded adjustments were made. The following inventory documents each modification and its reversal:
+To ensure reproducibility across environments without manual vendor file tampering, CASCADE provides a dedicated setup script: [`scripts/setup-switch-operations.py`](file:///C:/Users/yashs/Downloads/CASCADE_Day1_MVP_2026-11-04/cascade/scripts/setup-switch-operations.py).
 
-### A. Switch Console Application Code
-1. `C:\Users\yashs\AppData\Local\Programs\Switch Console\resources\app\dist\main\agent-controller.mjs`:
-   - **Change:** Added fallback null-checks on `agent.options` to prevent unhandled exceptions during agent spawn.
-   - **Reversal:** Reinstall Switch Console v0.40.1, or restore `agent-controller.mjs` from package backup.
-2. `C:\Users\yashs\AppData\Local\Programs\Switch Console\resources\app\dist\python\switch_core\bridges\agent\api\operations.py`:
-   - **Change:** Supported case-insensitive query parameter lookups and auto-placement verification for agents in legacy rooms.
-   - **Reversal:** Restore `operations.py` from package backup or reinstall Switch Console.
-3. `C:\Users\yashs\AppData\Local\Programs\Switch Console\resources\app\dist\python\switch_core\definitions.py`:
-   - **Change:** Registered `@operation cascade_evaluate_recovery` and `@operation cascade_execute_recovery`.
-   - **Reversal:** Revert `definitions.py` to backup without CASCADE operations.
+### A. Reproducible Setup Procedure
+```powershell
+# 1. Build CASCADE TypeScript CLI
+npm run build
 
-### B. PostgreSQL Database State (`switch` DB on port 59114)
-1. `rooms` Table:
-   - **Change:** Inserted legacy room mapping record for room `6fe42a1c-6f29-45de-8aca-da763634216e`.
-2. `room_agents` Table:
-   - **Change:** Inserted placement record associating agent `56911d08-ca1d-4e80-8812-9c77e3852dc9` with room `6fe42a1c-6f29-45de-8aca-da763634216e`.
-3. `agents` Table:
-   - **Change:** Updated definition for agent `56911d08-ca1d-4e80-8812-9c77e3852dc9` to Revision 9 (Antigravity provider, `gemini-3.8-flash` model, bounded CASCADE instructions).
-4. **Reversal SQL:**
-   ```sql
-   DELETE FROM room_agents WHERE room_id = '6fe42a1c-6f29-45de-8aca-da763634216e';
-   DELETE FROM rooms WHERE id = '6fe42a1c-6f29-45de-8aca-da763634216e';
-   ```
+# 2. Run Switch native operations registration script
+python scripts/setup-switch-operations.py
 
-### C. Host Environment PATH
-- **Change:** Added `C:\Users\yashs\tools\antigravity-acp\bin` to the user `Path` environment variable.
-- **Reversal:** Remove `C:\Users\yashs\tools\antigravity-acp\bin` from the user `Path` environment variable.
+# 3. Restart Switch Core service to load updated operations
+```
+
+The script automatically:
+- Discovers active `definitions.py` paths in standard Switch installation directories.
+- Injects or updates `@operation cascade_evaluate_recovery` and `@operation cascade_execute_recovery`.
+- Enforces strict input validation, correct executable path (`dist/src/cli/recover.js`), and exit code failure propagation.
+- Syncs ACP tool schemas to the local Antigravity ACP brain directory.
+
+### B. Local Installation Modifications & Reversal Inventory
+
+| Component | Path | Modification | Reversal Procedure |
+| :--- | :--- | :--- | :--- |
+| **Switch Core Operations** | `definitions.py` in `switch_core/bridges/agent/operations/` | Added `@operation cascade_evaluate_recovery` and `cascade_execute_recovery` | Remove the `# ── CASCADE Deterministic Operations` block from `definitions.py` |
+| **ACP Tool Schemas** | `.local/state/switch/antigravity-acp/.../mcp/switch/` | Registered `cascade_evaluate_recovery.json` and `cascade_execute_recovery.json` | Delete `cascade_*.json` from the brain MCP directory |
+| **PostgreSQL Database** | `rooms` and `room_agents` tables (`switch` DB on port 59114) | Added room mapping `6fe42a1c-6f29-45de-8aca-da763634216e` and assigned agent | `DELETE FROM room_agents WHERE room_id = '6fe42a1c-6f29-45de-8aca-da763634216e'; DELETE FROM rooms WHERE id = '6fe42a1c-6f29-45de-8aca-da763634216e';` |
+| **Host PATH** | Windows User `Path` | Added `C:\Users\yashs\tools\antigravity-acp\bin` | Remove directory from User `Path` |

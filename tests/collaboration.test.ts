@@ -175,6 +175,38 @@ test('Collaboration: executeVerifiedRecovery executes full pipeline end-to-end',
     assert.equal(result.alreadyApplied, false);
     assert.ok(result.receiptPost);
     assert.equal(result.receiptPost.postId, 'post-receipt-out');
+
+    // Repeated execution test (Finding 2): verify idempotence and no duplicate receipt post
+    let secondPostAttempted = false;
+    const trackingMockFetch: typeof fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.endsWith('/api/v4/posts') && init?.method === 'POST') {
+        secondPostAttempted = true;
+      }
+      return mockFetch(url, init);
+    }) as typeof fetch;
+
+    const trackingVerifier = new MattermostMessageVerifier({
+      ...config,
+      fetchFn: trackingMockFetch,
+    });
+
+    const result2 = await executeVerifiedRecovery({
+      scenario: scenarioFixture,
+      plan: planB,
+      approvalRef: ref,
+      verifier: trackingVerifier,
+      config: { ...config, fetchFn: trackingMockFetch },
+      channelId: 'chan-ops',
+      outputRoot: tempDir,
+      postReceiptToChannel: true,
+    });
+
+    assert.equal(result2.alreadyApplied, true);
+    assert.equal(result2.receiptPost, undefined);
+    assert.equal(secondPostAttempted, false, 'Expected no duplicate receipt post to Mattermost on replay');
+    assert.equal(result2.receipt.planHash, result.receipt.planHash);
+    assert.equal(result2.receipt.executionKey, result.receipt.executionKey);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

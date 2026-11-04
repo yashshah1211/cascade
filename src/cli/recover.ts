@@ -63,9 +63,21 @@ async function main() {
   }
 
   if (approvalMsgId) {
-    console.log(`\nVerifying live Switch approval message ID: ${approvalMsgId}...`);
+    if (!/^[a-z0-9]{26}$/.test(approvalMsgId)) {
+      console.error(`Error: Invalid approval message ID "${approvalMsgId}". Must be a 26-character lowercase alphanumeric post ID.`);
+      process.exitCode = 1;
+      return;
+    }
     const outDirArgIdx = args.indexOf('--output-dir');
     const outDirArg = outDirArgIdx !== -1 ? args[outDirArgIdx + 1] : undefined;
+    if (outDirArg) {
+      const normalized = outDirArg.replace(/\\/g, '/');
+      if (normalized.includes('..') || !normalized.startsWith('artifacts/')) {
+        console.error(`Error: Invalid output directory "${outDirArg}". Must target an approved path under "artifacts/".`);
+        process.exitCode = 1;
+        return;
+      }
+    }
     const outputRoot = outDirArg
       ? resolve(process.cwd(), outDirArg)
       : resolve(process.cwd(), process.env.CASCADE_OUTPUT_DIR ?? 'artifacts/event-430-recovery-live');
@@ -94,7 +106,9 @@ async function main() {
     console.log(`  Plan Hash: ${result.receipt.planHash}`);
     console.log(`  State: ${result.receipt.state}`);
     console.log(`  Already Applied: ${result.alreadyApplied}`);
-    if (result.receiptPost) {
+    if (result.alreadyApplied) {
+      console.log(`ℹ️ Plan already applied locally (idempotent replay). No duplicate receipt posted.`);
+    } else if (result.receiptPost) {
       console.log(`✅ EXECUTION RECEIPT POSTED TO SWITCH!`);
       console.log(`  Receipt Post ID: ${result.receiptPost.postId}`);
     }
