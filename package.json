@@ -13,6 +13,7 @@
     "demo": "npm run build && node dist/src/cli/main.js demo",
     "inspect": "npm run build && node dist/src/cli/main.js inspect",
     "dashboard": "npm run build && node dist/src/dashboard/server.js",
+    "recover": "npm run build && node dist/src/cli/recover.js",
     "check": "npm run test"
   },
   "devDependencies": {

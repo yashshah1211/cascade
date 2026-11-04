@@ -103,3 +103,207 @@ export const unconfiguredSwitchVerifier: SwitchMessageVerifier = {
     throw new Error('Switch API verifier not configured; live approval is BLOCKED');
   },
 };
+
+export interface MattermostVerifierConfig {
+  /** Base URL of the Mattermost server, e.g. "http://localhost:59113" */
+  readonly baseUrl: string;
+  /** Personal Access Token or Bot Token for API access */
+  readonly token: string;
+  /** Logical serverId to match ref.serverId (defaults to baseUrl or configured serverId) */
+  readonly serverId?: string;
+  /** Map Mattermost userId (exact account ID) to canonical humanId (e.g. "human:organizer-owner"). Generic usernames are rejected. */
+  readonly userMap?: Readonly<Record<string, string>>;
+  /** Map Mattermost channelId to canonical roomId (e.g. "room:cascade-operations") */
+  readonly roomMap?: Readonly<Record<string, string>>;
+  /** Optional custom fetch implementation for testing */
+  readonly fetchFn?: typeof fetch;
+}
+
+const DISALLOWED_GENERIC_USERNAMES = new Set([
+  'user',
+  'admin',
+  'root',
+  'administrator',
+  'guest',
+  'owner',
+  'operator',
+  'system',
+]);
+
+function isTruthyFlag(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes';
+  }
+  return false;
+}
+
+/**
+ * Production Switch / Mattermost message verifier that queries the live
+ * authenticated REST API to verify message authenticity, human authorship,
+ * correct room/channel, and creation timestamp.
+ */
+export class MattermostMessageVerifier implements SwitchMessageVerifier {
+  private readonly baseUrl: string;
+  private readonly token: string;
+  private readonly serverId: string;
+  private readonly userMap: Readonly<Record<string, string>>;
+  private readonly roomMap: Readonly<Record<string, string>>;
+  private readonly fetchFn: typeof fetch;
+
+  constructor(config: MattermostVerifierConfig) {
+    if (!config || typeof config !== 'object') throw new TypeError('Invalid MattermostVerifierConfig');
+    if (typeof config.baseUrl !== 'string' || !config.baseUrl.trim())
+      throw new TypeError('Mattermost baseUrl must be a nonempty string');
+    if (typeof config.token !== 'string' || !config.token.trim())
+      throw new TypeError('Mattermost token must be a nonempty string');
+
+    if (config.userMap && typeof config.userMap === 'object') {
+      for (const key of Object.keys(config.userMap)) {
+        if (DISALLOWED_GENERIC_USERNAMES.has(key.toLowerCase().trim())) {
+          throw new TypeError(`userMap keys must be exact account IDs, not generic usernames like "${key}"`);
+        }
+      }
+    }
+
+    this.baseUrl = config.baseUrl.replace(/\/+$/, '');
+    this.token = config.token.trim();
+    this.serverId = config.serverId?.trim() || this.baseUrl;
+    this.userMap = config.userMap ?? {};
+    this.roomMap = config.roomMap ?? {};
+    this.fetchFn = config.fetchFn ?? fetch;
+  }
+
+  async fetchVerifiedMessage(ref: SwitchMessageReference): Promise<VerifiedSwitchMessage | null> {
+    if (!ref || typeof ref !== 'object') return null;
+    if (typeof ref.messageId !== 'string' || !ref.messageId.trim()) return null;
+    if (typeof ref.serverId !== 'string' || !ref.serverId.trim()) return null;
+    if (typeof ref.roomId !== 'string' || !ref.roomId.trim()) return null;
+
+    // Server verification: must strictly match configured serverId
+    if (ref.serverId !== this.serverId) {
+      return null;
+    }
+
+    try {
+      // 1. Fetch Post from authenticated Mattermost endpoint
+      const postUrl = `${this.baseUrl}/api/v4/posts/${encodeURIComponent(ref.messageId)}`;
+      const postResp = await this.fetchFn(postUrl, {
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: 'application/json',
+        },
+      });
+      if (!postResp.ok) return null;
+
+      const post = (await postResp.json()) as {
+        id?: string;
+        user_id?: string;
+        channel_id?: string;
+        message?: string;
+        create_at?: number;
+        props?: Record<string, unknown>;
+      };
+
+      if (!post || post.id !== ref.messageId || !post.user_id || !post.channel_id) {
+        return null;
+      }
+
+      // 2. Room verification: channel must strictly match ref.roomId (via roomMap if configured)
+      const hasRoomMap = Object.keys(this.roomMap).length > 0;
+      const canonicalRoom = hasRoomMap ? this.roomMap[post.channel_id] : post.channel_id;
+      if (canonicalRoom !== ref.roomId) {
+        return null;
+      }
+
+      // 3. User verification: fetch authenticated user details
+      const userUrl = `${this.baseUrl}/api/v4/users/${encodeURIComponent(post.user_id)}`;
+      const userResp = await this.fetchFn(userUrl, {
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: 'application/json',
+        },
+      });
+      if (!userResp.ok) return null;
+
+      const user = (await userResp.json()) as {
+        id?: string;
+        username?: string;
+        is_bot?: boolean | string | number;
+        roles?: string;
+      };
+
+      if (!user || user.id !== post.user_id) return null;
+
+      // Determine authorKind (strictly enforce that bots, webhooks, and override usernames are 'agent')
+      const isBot =
+        isTruthyFlag(user.is_bot) ||
+        (typeof user.roles === 'string' && user.roles.split(/\s+/).includes('system_bot')) ||
+        (post.props !== undefined && (
+          isTruthyFlag(post.props.from_bot) ||
+          isTruthyFlag(post.props.from_webhook) ||
+          (post.props.override_username !== undefined &&
+           post.props.override_username !== null &&
+           post.props.override_username !== '' &&
+           post.props.override_username !== false) ||
+          (post.props.webhook_display_name !== undefined &&
+           post.props.webhook_display_name !== null &&
+           post.props.webhook_display_name !== '')
+        ));
+
+      const authorKind: 'human' | 'agent' = isBot ? 'agent' : 'human';
+
+      // Map humanId strictly by exact authenticated account ID (never by username)
+      const humanId = this.userMap[user.id] ?? user.id;
+
+      const createdAt = typeof post.create_at === 'number'
+        ? new Date(post.create_at).toISOString()
+        : '';
+
+      return {
+        serverId: ref.serverId,
+        roomId: ref.roomId,
+        messageId: ref.messageId,
+        humanId,
+        authorKind,
+        content: typeof post.message === 'string' ? post.message : '',
+        createdAt,
+      };
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** Create a production verifier from environment variables or custom config. */
+export function createProductionSwitchVerifier(
+  overrides?: Partial<MattermostVerifierConfig>
+): SwitchMessageVerifier {
+  const baseUrl =
+    overrides?.baseUrl ??
+    process.env.CASCADE_SWITCH_URL ??
+    process.env.SWITCH_MATTERMOST_URL ??
+    process.env.MATTERMOST_URL ??
+    'http://localhost:59113';
+
+  const token =
+    overrides?.token ??
+    process.env.CASCADE_SWITCH_TOKEN ??
+    process.env.SWITCH_MATTERMOST_TOKEN ??
+    process.env.MATTERMOST_TOKEN ??
+    '';
+
+  if (!token && !overrides?.fetchFn) {
+    return unconfiguredSwitchVerifier;
+  }
+
+  return new MattermostMessageVerifier({
+    baseUrl,
+    token: token || 'unconfigured',
+    serverId: overrides?.serverId ?? process.env.SWITCH_SERVER_ID,
+    userMap: overrides?.userMap,
+    roomMap: overrides?.roomMap,
+    fetchFn: overrides?.fetchFn,
+  });
+}

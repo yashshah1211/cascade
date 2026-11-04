@@ -1,7 +1,25 @@
+# Node and generated output
 node_modules/
 dist/
 artifacts/*
 !artifacts/.gitkeep
-.env
 *.log
 .DS_Store
+
+# Local configuration and credentials (never commit)
+.env
+.env.*
+!.env.example
+**/bot.env
+**/cascade_bot.env
+**/acp_token.json
+**/credentials.json
+*.pem
+*.p12
+*.pfx
+*.key
+scratch/
+.local/
+.gemini/
+switchdash/
+private-evidence/
