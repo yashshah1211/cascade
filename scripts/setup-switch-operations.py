@@ -199,72 +199,53 @@ def discover_candidate_installations():
     return [c for c in candidates if os.path.exists(c)]
 
 
+def _find_bounded_cascade_block(content: str) -> tuple[int, int] | None:
+    """Return exact CASCADE marker bounds; reject unsafe legacy or malformed blocks."""
+    start_count = content.count(START_MARKER)
+    end_count = content.count(END_MARKER)
+    if start_count == 1 and end_count == 1:
+        start = content.find(START_MARKER)
+        end = content.find(END_MARKER)
+        if end < start:
+            raise ValueError("CASCADE end marker precedes its start marker; refusing to edit.")
+        return start, end + len(END_MARKER)
+
+    if start_count or end_count:
+        raise ValueError(
+            "Unbounded or duplicated CASCADE markers; refusing to edit. "
+            "Migrate the legacy installation manually after inspecting surrounding code."
+        )
+
+    legacy_marker = "# ── CASCADE Deterministic Operations"
+    legacy_functions = re.search(
+        r"(?m)^[ \t]*(?:async[ \t]+)?def[ \t]+cascade_(?:evaluate|execute)_recovery[ \t]*\(",
+        content,
+    )
+    if legacy_marker in content or legacy_functions:
+        raise ValueError(
+            "Legacy CASCADE operations have no complete markers; refusing to edit. "
+            "Migrate the legacy installation manually to preserve unrelated code."
+        )
+
+    return None
+
+
 def replace_marked_block(content: str, new_block: str) -> tuple[str, bool]:
-    """
-    Replaces only the marked CASCADE block in content.
-    Preserves all preceding and following content verbatim.
-    Returns (updated_content, was_replaced).
-    """
-    if START_MARKER in content and END_MARKER in content:
-        start_idx = content.find(START_MARKER)
-        end_idx = content.find(END_MARKER) + len(END_MARKER)
-        updated = content[:start_idx].rstrip() + "\n\n" + new_block.strip() + "\n\n" + content[end_idx:].lstrip()
-        return updated.rstrip() + "\n", True
-
-    # Legacy marker compatibility (where END_MARKER was not present)
-    legacy_start = "# ── CASCADE Deterministic Operations"
-    if legacy_start in content:
-        start_idx = content.find(legacy_start)
-        # Check if another function or marker appears after
-        # If none, replace everything from start_idx to EOF
-        updated = content[:start_idx].rstrip() + "\n\n" + new_block.strip() + "\n"
-        return updated, True
-
-    # Check for legacy functions directly
-    earliest_fn = -1
-    for fn_name in ("cascade_evaluate_recovery", "cascade_execute_recovery"):
-        idx = content.find(fn_name)
-        if idx != -1:
-            op_idx = content.rfind("@operation", 0, idx)
-            if op_idx != -1 and (earliest_fn == -1 or op_idx < earliest_fn):
-                earliest_fn = op_idx
-
-    if earliest_fn != -1:
-        updated = content[:earliest_fn].rstrip() + "\n\n" + new_block.strip() + "\n"
-        return updated, True
-
-    # New insertion at end
-    updated = content.rstrip() + "\n\n" + new_block.strip() + "\n"
-    return updated, False
+    """Replace only a fully bounded block, preserving every unrelated character."""
+    bounds = _find_bounded_cascade_block(content)
+    if bounds is not None:
+        start, end = bounds
+        return content[:start] + new_block.strip() + content[end:], True
+    return content.rstrip() + "\n\n" + new_block.strip() + "\n", False
 
 
 def remove_marked_block(content: str) -> tuple[str, bool]:
-    """Removes the marked CASCADE block from content."""
-    if START_MARKER in content and END_MARKER in content:
-        start_idx = content.find(START_MARKER)
-        end_idx = content.find(END_MARKER) + len(END_MARKER)
-        updated = content[:start_idx].rstrip() + "\n\n" + content[end_idx:].lstrip()
-        return updated.rstrip() + "\n", True
-
-    legacy_start = "# ── CASCADE Deterministic Operations"
-    if legacy_start in content:
-        start_idx = content.find(legacy_start)
-        updated = content[:start_idx].rstrip() + "\n"
-        return updated, True
-
-    earliest_fn = -1
-    for fn_name in ("cascade_evaluate_recovery", "cascade_execute_recovery"):
-        idx = content.find(fn_name)
-        if idx != -1:
-            op_idx = content.rfind("@operation", 0, idx)
-            if op_idx != -1 and (earliest_fn == -1 or op_idx < earliest_fn):
-                earliest_fn = op_idx
-
-    if earliest_fn != -1:
-        updated = content[:earliest_fn].rstrip() + "\n"
-        return updated, True
-
-    return content, False
+    """Rollback only the current CASCADE block, retaining later vendor edits."""
+    bounds = _find_bounded_cascade_block(content)
+    if bounds is None:
+        return content, False
+    start, end = bounds
+    return content[:start] + content[end:], True
 
 
 def update_acp_schemas(dry_run: bool = False):
@@ -369,30 +350,36 @@ def main(argv=None):
         original_content = f.read()
 
     if args.rollback:
+        try:
+            cleaned_content, removed = remove_marked_block(original_content)
+        except ValueError as exc:
+            print(f"[ERROR] {exc}")
+            return 1
+
         if args.dry_run:
-            print(f"[DRY-RUN] Would rollback CASCADE operations from: {target_path}")
-            if os.path.exists(backup_path):
-                print(f"[DRY-RUN] Backup file exists at: {backup_path}")
+            if removed:
+                print(f"[DRY-RUN] Would remove only the bounded CASCADE block from: {target_path}")
+            else:
+                print(f"[DRY-RUN] No bounded CASCADE block found in: {target_path}")
             return 0
 
-        # If backup exists, restore it; otherwise strip the marked block
-        if os.path.exists(backup_path):
-            shutil.copy2(backup_path, target_path)
-            print(f"[ROLLBACK] Restored original definitions.py from backup: {backup_path}")
+        if not removed:
+            print(f"[INFO] No CASCADE operations block found in: {target_path}")
             return 0
-        else:
-            cleaned_content, removed = remove_marked_block(original_content)
-            if removed:
-                with open(target_path, "w", encoding="utf-8") as f:
-                    f.write(cleaned_content)
-                print(f"[ROLLBACK] Removed marked CASCADE operations block from: {target_path}")
-                return 0
-            else:
-                print(f"[INFO] No CASCADE operations block found in: {target_path}")
-                return 0
+
+        # Never restore an old .bak over newer, unrelated vendor modifications.
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(cleaned_content)
+        print(f"[ROLLBACK] Removed only the bounded CASCADE block from: {target_path}")
+        print(f"[INFO] Existing backup, if any, preserved at: {backup_path}")
+        return 0
 
     # Normal setup / update
-    updated_content, was_replaced = replace_marked_block(original_content, OPERATIONS_TEMPLATE)
+    try:
+        updated_content, was_replaced = replace_marked_block(original_content, OPERATIONS_TEMPLATE)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+        return 1
 
     if args.dry_run:
         action = "update existing marked block in" if was_replaced else "append marked block to"
