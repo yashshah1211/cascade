@@ -208,6 +208,45 @@ function recoverStructuredToolResult(content, depth = 0) {
   return null;
 }
 
+/**
+ * Report only an allowlisted structural fingerprint of two ACP steps.
+ * Never echo tool arguments, tool output, message text, tokens or arbitrary keys.
+ */
+export function inspectAcpShape(text) {
+  const steps = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    let value;
+    try { value = JSON.parse(line); } catch { continue; }
+    if (value?.step_index === 107 || value?.step_index === 108) {
+      steps.set(value.step_index, value);
+    }
+  }
+  const fields = ['step_index', 'source', 'type', 'tool_calls', 'content', 'result',
+    'output', 'tool_result', 'data', 'payload', 'message'];
+  const summarize = (n) => {
+    const record = steps.get(n);
+    if (!record) return { present: false };
+    const types = {};
+    for (const key of fields) {
+      if (!Object.hasOwn(record, key)) continue;
+      const v = record[key];
+      types[key] = Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v;
+    }
+    const isKnown = (value, pattern) =>
+      typeof value === 'string' && pattern.test(value);
+    return {
+      present: true,
+      fields: types,
+      sourceRole: isKnown(record.source, /^(model|assistant)$/i) ? 'model'
+        : isKnown(record.source, /^(tool|mcp|tool_result)$/i) ? 'tool' : 'other-or-unset',
+      typeRole: isKnown(record.type, /^(planner_response|assistant_message)$/i) ? 'model'
+        : isKnown(record.type, /^(mcp_tool|tool_result|tool_response)$/i) ? 'tool' : 'other-or-unset',
+      toolCallCount: Array.isArray(record.tool_calls) ? record.tool_calls.length : null,
+    };
+  };
+  return { step107: summarize(107), step108: summarize(108) };
+}
+
 export function extractVerifiedAcpTranscript(text) {
   // Extract only known model/tool steps. No raw transcript data is emitted or logged.
   const lines = text.split(/\r?\n/).filter(Boolean);
@@ -223,7 +262,8 @@ export function extractVerifiedAcpTranscript(text) {
   }
   if (invocation.source !== 'MODEL' || result.source !== 'TOOL' ||
       invocation.type !== 'PLANNER_RESPONSE' || result.type !== 'MCP_TOOL') {
-    throw new Error('ACP steps 107–108 are not a model tool invocation and tool-owned result.');
+    throw new Error('ACP steps 107–108 have different source/type metadata than the verified parser supports. ' +
+      'Use --inspect-acp to print only safe structural metadata; no raw transcript will be shared.');
   }
   const calls = invocation.tool_calls ?? [];
   const call = calls.find(x => x.name === 'call_mcp_tool' &&
