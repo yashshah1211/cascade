@@ -461,3 +461,113 @@ test('Reviewer Finding 3 — KNOWN_RESOURCE_NODES contains resource:av and fixtu
   assert.ok(KNOWN_RESOURCE_NODES.has('resource:av'));
   assert.doesNotThrow(() => validateScenario(sc()));
 });
+
+// --- Mission 01C: Final Artifact Integrity Regression Tests ---
+
+test('Mission 01C — normal unchanged repeat execution returns existing receipt with alreadyApplied: true', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-01c-normal-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    assert.equal(first.alreadyApplied, false);
+
+    const second = await applyPlan(input);
+    assert.equal(second.alreadyApplied, true);
+    assert.deepEqual(second.receipt, first.receipt);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Mission 01C — schedule.json: changed projectedCostINR to 0 is rejected', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-01c-cost-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    const schedulePath = join(temp, first.receipt.executionKey, 'schedule.json');
+
+    const scheduleData = JSON.parse(await readFile(schedulePath, 'utf8'));
+    scheduleData.projectedCostINR = 0;
+    await writeFile(schedulePath, JSON.stringify(scheduleData, null, 2) + '\n');
+
+    await assert.rejects(applyPlan(input), /schedule\.json projectedCostINR mismatch/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Mission 01C — schedule.json: changed allocation attendeeTo to 0 is rejected', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-01c-alloc-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    const schedulePath = join(temp, first.receipt.executionKey, 'schedule.json');
+
+    const scheduleData = JSON.parse(await readFile(schedulePath, 'utf8'));
+    scheduleData.allocations[0].attendeeTo = 0;
+    await writeFile(schedulePath, JSON.stringify(scheduleData, null, 2) + '\n');
+
+    await assert.rejects(applyPlan(input), /schedule\.json content mismatch/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Mission 01C — assignments.json: altered attendee ranges and counts is rejected', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-01c-assign-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    const assignmentsPath = join(temp, first.receipt.executionKey, 'assignments.json');
+
+    const assignmentsData = JSON.parse(await readFile(assignmentsPath, 'utf8'));
+    // Alter attendee range and count while keeping totalAttendees intact
+    assignmentsData.hallAssignments[0].attendeeRange = [0, 50];
+    assignmentsData.hallAssignments[0].attendeeCount = 51;
+    await writeFile(assignmentsPath, JSON.stringify(assignmentsData, null, 2) + '\n');
+
+    await assert.rejects(applyPlan(input), /assignments\.json content mismatch/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Mission 01C — receipt.json: unexpected externalActionCompleted field is rejected', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-01c-receipt-extra-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    const receiptPath = join(temp, first.receipt.executionKey, 'receipt.json');
+
+    const receiptData = JSON.parse(await readFile(receiptPath, 'utf8'));
+    receiptData.externalActionCompleted = true;
+    await writeFile(receiptPath, JSON.stringify(receiptData, null, 2) + '\n');
+
+    await assert.rejects(applyPlan(input), /Receipt contains unexpected field: externalActionCompleted/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Mission 01C — stakeholder-messages.md: replaced content with preserved disclaimer is rejected', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-01c-messages-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    const messagesPath = join(temp, first.receipt.executionKey, 'stakeholder-messages.md');
+
+    // Replace body while keeping the disclaimer line
+    const tamperedContent = '# Drafts only — NOT SENT\n\nAll venues booked and payments wired to external vendors.\n';
+    await writeFile(messagesPath, tamperedContent);
+
+    await assert.rejects(applyPlan(input), /stakeholder-messages\.md content mismatch/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
