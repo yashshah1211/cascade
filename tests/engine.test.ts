@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadFixtures } from '../src/cli/load.js';
-import { evaluatePlan } from '../src/engine/evaluate.js';
+import { evaluatePlan, MIN_AV_KITS_PER_ACTIVE_HALL } from '../src/engine/evaluate.js';
 import { traceImpact } from '../src/engine/impact.js';
 import { applyPlan } from '../src/engine/execute.js';
 import { budgetApprovalCommand, verifyBudgetApproval, type SwitchMessageVerifier } from '../src/switch/approval.js';
-import { planHash, validatePlan, validateScenario, validateDisruption } from '../src/domain/validate.js';
+import { planHash, validatePlan, validateScenario, validateDisruption, KNOWN_RESOURCE_NODES } from '../src/domain/validate.js';
 import type { RecoveryPlan, Scenario } from '../src/domain/types.js';
 
 const FIX = await loadFixtures();
@@ -298,4 +298,166 @@ test('Hardening — traceImpact validates scenario and disruption', () => {
   const badScenario = sc();
   badScenario.attendees = 0;
   assert.throws(() => traceImpact(badScenario, FIX.disruption), /Scenario needs attendees/);
+});
+
+// --- Mission 01B: Independent Review Findings Regression Tests ---
+
+test('Reviewer Finding 1 — zero AV equipment bypass is rejected (fails AV_CONCURRENCY)', () => {
+  const plan = byId('plan-b');
+  plan.rentedAvKits = 0;
+  plan.allocations[0]!.avKits = 0;
+  plan.allocations[1]!.avKits = 0;
+
+  const result = evaluatePlan(sc(), plan);
+  assert.equal(result.verdict, 'FAIL');
+  const avCheck = result.checks.find(c => c.id === 'AV_CONCURRENCY');
+  assert.equal(avCheck?.status, 'FAIL');
+  assert.match(avCheck?.message ?? '', /0 AV equipment|only 1 supplied/);
+});
+
+test('Reviewer Finding 1 — active hall with zero AV equipment fails even if rentedAvKits > 0', () => {
+  const plan = byId('plan-b');
+  plan.rentedAvKits = 1;
+  plan.allocations[0]!.avKits = 0;
+  plan.allocations[1]!.avKits = 0;
+
+  const result = evaluatePlan(sc(), plan);
+  assert.equal(result.verdict, 'FAIL');
+  const avCheck = result.checks.find(c => c.id === 'AV_CONCURRENCY');
+  assert.equal(avCheck?.status, 'FAIL');
+  assert.match(avCheck?.message ?? '', /0 AV equipment/);
+});
+
+test('Reviewer Finding 1 — allocations sharing hall do not double-count equipment', () => {
+  const scenario = sc();
+  scenario.halls[0]!.capacity = 500;
+  const plan = byId('plan-c');
+  // Both allocations run concurrently in hall:a at 10:00
+  plan.allocations[0]!.start = '2026-11-06T10:00:00+05:30';
+  plan.allocations[0]!.end = '2026-11-06T10:45:00+05:30';
+  plan.allocations[0]!.avKits = 1;
+  plan.allocations[1]!.start = '2026-11-06T10:00:00+05:30';
+  plan.allocations[1]!.end = '2026-11-06T10:45:00+05:30';
+  plan.allocations[1]!.avKits = 0; // shares hall:a equipment
+
+  const result = evaluatePlan(scenario, plan);
+  const avCheck = result.checks.find(c => c.id === 'AV_CONCURRENCY');
+  assert.equal(avCheck?.status, 'PASS');
+  assert.equal(avCheck?.evidence.peakDemand, 1);
+});
+
+test('Reviewer Finding 2 — receipt tampering on state (SENT_AND_BOOKED) is rejected', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-state-tamper-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    const receiptPath = join(temp, first.receipt.executionKey, 'receipt.json');
+
+    const receiptData = JSON.parse(await readFile(receiptPath, 'utf8'));
+    receiptData.state = 'SENT_AND_BOOKED';
+    await writeFile(receiptPath, JSON.stringify(receiptData, null, 2) + '\n');
+
+    await assert.rejects(applyPlan(input), /state is invalid or tampered/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Reviewer Finding 2 — receipt tampering on actions (fake payment) is rejected', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-action-tamper-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    const receiptPath = join(temp, first.receipt.executionKey, 'receipt.json');
+
+    const receiptData = JSON.parse(await readFile(receiptPath, 'utf8'));
+    receiptData.actions.push({ artifact: 'fake-payment-voucher.json', status: 'booked' });
+    await writeFile(receiptPath, JSON.stringify(receiptData, null, 2) + '\n');
+
+    await assert.rejects(applyPlan(input), /actions list has been altered/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Reviewer Finding 2 — receipt tampering on approval evidence is rejected', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-evidence-tamper-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    const receiptPath = join(temp, first.receipt.executionKey, 'receipt.json');
+
+    const receiptData = JSON.parse(await readFile(receiptPath, 'utf8'));
+    receiptData.humanApprovalEvidence.approvalMessageId = 'forged-message-id-999';
+    await writeFile(receiptPath, JSON.stringify(receiptData, null, 2) + '\n');
+
+    await assert.rejects(applyPlan(input), /humanApprovalEvidence is forged/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Reviewer Finding 2 — missing local artifact files on disk causes receipt rejection', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-artifact-missing-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+    const first = await applyPlan(input);
+    const schedulePath = join(temp, first.receipt.executionKey, 'schedule.json');
+
+    await unlink(schedulePath);
+    await assert.rejects(applyPlan(input), /missing required local artifact files/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Reviewer Finding 2 — concurrent execution recovery path validates receipt integrity', async () => {
+  const temp = await mkdtemp(join(tmpdir(), 'cascade-concurrent-test-'));
+  try {
+    const approval = await approveB();
+    const input = { scenario: sc(), plan: byId('plan-b'), trustedApprovals: [approval], outputRoot: temp };
+
+    // Run parallel applyPlan calls to trigger concurrent recovery path
+    const [res1, res2] = await Promise.all([applyPlan(input), applyPlan(input)]);
+    assert.ok(res1.receipt);
+    assert.ok(res2.receipt);
+    assert.equal(res1.receipt.planHash, res2.receipt.planHash);
+    assert.equal(res1.receipt.state, 'APPLIED_LOCALLY');
+    assert.equal(res2.receipt.state, 'APPLIED_LOCALLY');
+    assert.ok(res1.alreadyApplied || res2.alreadyApplied);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Reviewer Finding 3 — unknown resource dependency is rejected', () => {
+  const scenario = sc();
+  scenario.commitments[0]!.dependencies.push({
+    prerequisiteId: 'resource:missing-supplier',
+    kind: 'requires',
+  });
+  assert.throws(
+    () => validateScenario(scenario),
+    /Missing dependency: commitment commitment:capacity references unknown resource resource:missing-supplier/
+  );
+});
+
+test('Reviewer Finding 3 — unresolvable prerequisite prefix is rejected fail-closed', () => {
+  const scenario = sc();
+  scenario.commitments[0]!.dependencies = [
+    { prerequisiteId: 'vendor:external-audio', kind: 'requires' },
+  ];
+  assert.throws(
+    () => validateScenario(scenario),
+    /Missing dependency: commitment commitment:capacity references unresolvable prerequisite vendor:external-audio/
+  );
+});
+
+test('Reviewer Finding 3 — KNOWN_RESOURCE_NODES contains resource:av and fixture validates', () => {
+  assert.ok(KNOWN_RESOURCE_NODES.has('resource:av'));
+  assert.doesNotThrow(() => validateScenario(sc()));
 });

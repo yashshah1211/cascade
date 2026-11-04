@@ -15,10 +15,16 @@
 **Verification**
 
 - TypeScript compilation: PASS (`tsc -p tsconfig.json`)
-- Node test runner: **13 PASS / 0 FAIL**
+- Node test runner: **35 PASS / 0 FAIL** (13 baseline + 11 Mission 01 hardening + 11 Mission 01B review corrections)
 - Computed verdicts: Plan A FAIL; Plan B REQUIRES_APPROVAL; Plan C FAIL.
 - Impact graph: seven commitments affected.
 - Local HTTP API: returned synthetic scenario, seven impact items and three computed verdicts.
+
+**Mission 01B Review Corrections (Implemented)**
+
+- **Finding 1 (AV Bypass):** Enforced `MIN_AV_KITS_PER_ACTIVE_HALL = 1` for active halls hosting sessions. Active halls with zero allocated AV equipment fail closed; multiple allocations in the same hall share equipment without double-counting.
+- **Finding 2 (Receipt Validation):** Introduced strict structural, semantic, and disk integrity validation (`validateReceiptIntegrity`) for execution receipts. Rejects modified states (e.g. `SENT_AND_BOOKED`), unauthorized actions, forged human approval evidence, or missing/altered on-disk local artifacts.
+- **Finding 3 (Resource Registry):** Introduced `KNOWN_RESOURCE_NODES` (`resource:av`) and fail-closed validation in `validateScenario`. Unknown resources (e.g. `resource:missing-supplier`) or unresolved prefixes throw `TypeError`.
 
 **Blockers**
 

@@ -30,6 +30,9 @@ function nonnegativeInt(value: unknown, label: string): asserts value is number 
   if (!Number.isSafeInteger(value) || (value as number) < 0) throw new TypeError(`${label}: expected nonnegative integer`);
 }
 
+/** Known valid operational resource nodes for scenario commitments. */
+export const KNOWN_RESOURCE_NODES: ReadonlySet<string> = new Set(['resource:av']);
+
 export function validateDisruption(input: unknown): asserts input is Disruption {
   if (!input || typeof input !== 'object') throw new TypeError('Disruption must be an object');
   const d = input as Record<string, unknown>;
@@ -88,11 +91,20 @@ export function validateScenario(input: unknown): asserts input is Scenario {
       }
       seenPrereqs.add(prereqId);
 
-      if (prereqId.startsWith('commitment:') && !ids.has(prereqId)) {
-        throw new TypeError(`Missing dependency: commitment ${id} references nonexistent commitment ${prereqId}`);
-      }
-      if (prereqId.startsWith('venue:') && !validVenues.has(prereqId)) {
-        throw new TypeError(`Missing dependency: commitment ${id} references unknown venue ${prereqId}`);
+      if (prereqId.startsWith('commitment:')) {
+        if (!ids.has(prereqId)) {
+          throw new TypeError(`Missing dependency: commitment ${id} references nonexistent commitment ${prereqId}`);
+        }
+      } else if (prereqId.startsWith('venue:')) {
+        if (!validVenues.has(prereqId)) {
+          throw new TypeError(`Missing dependency: commitment ${id} references unknown venue ${prereqId}`);
+        }
+      } else if (prereqId.startsWith('resource:')) {
+        if (!KNOWN_RESOURCE_NODES.has(prereqId)) {
+          throw new TypeError(`Missing dependency: commitment ${id} references unknown resource ${prereqId}`);
+        }
+      } else {
+        throw new TypeError(`Missing dependency: commitment ${id} references unresolvable prerequisite ${prereqId}`);
       }
     }
   }
