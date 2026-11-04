@@ -1,0 +1,27 @@
+{
+  "id": "event-430", "revision": 1,
+  "title": "Auditorium cancelled before the 430-person event",
+  "attendees": 430,
+  "originalVenueId": "venue:main",
+  "kickoffAt": "2026-11-06T10:00:00+05:30",
+  "sponsorShowcaseBefore": "2026-11-06T12:00:00+05:30",
+  "baselineBudgetINR": 80000,
+  "baselineCommittedCostINR": 80000,
+  "avKitsAvailable": 1,
+  "avKitRentalCostINR": 3000,
+  "halls": [
+    { "id": "hall:a", "label": "Replacement Hall A", "capacity": 250, "accessible": true },
+    { "id": "hall:b", "label": "Replacement Hall B", "capacity": 220, "accessible": true }
+  ],
+  "approvalAuthority": { "approverId": "human:organizer-owner", "serverId": "switch:local-demo", "roomId": "room:cascade-operations" },
+  "factsProvenance": "SYNTHETIC FIXTURE ONLY — no real venue, vendor, capacity verification, or Switch authorization",
+  "commitments": [
+    { "id": "commitment:capacity", "description": "Provide seating for all 430 participants", "beneficiary": "attendees", "owner": "organizer-ops", "approver": "human:organizer-owner", "dueAt": "2026-11-06T10:00:00+05:30", "classification": "hard", "dependencies": [{"prerequisiteId":"venue:main","kind":"requires"}], "provenance": "synthetic-brief" },
+    { "id": "commitment:kickoff", "description": "All participants join synchronized opening at 10:00", "beneficiary": "attendees", "owner": "stage-lead", "approver": "human:organizer-owner", "dueAt": "2026-11-06T10:00:00+05:30", "classification": "hard", "dependencies": [{"prerequisiteId":"venue:main","kind":"requires"},{"prerequisiteId":"commitment:capacity","kind":"requires"}], "provenance": "synthetic-brief" },
+    { "id": "commitment:keynote", "description": "Broadcast the same keynote to all active halls", "beneficiary": "speakers", "owner": "AV-lead", "approver": "human:organizer-owner", "dueAt": "2026-11-06T10:00:00+05:30", "classification": "hard", "dependencies": [{"prerequisiteId":"commitment:kickoff","kind":"requires"},{"prerequisiteId":"resource:av","kind":"requires"}], "provenance": "synthetic-brief" },
+    { "id": "commitment:av", "description": "Provide staffed AV kit for every simultaneous hall", "beneficiary": "speakers", "owner": "AV-lead", "approver": "human:organizer-owner", "dueAt": "2026-11-06T10:00:00+05:30", "classification": "hard", "dependencies": [{"prerequisiteId":"venue:main","kind":"requires"},{"prerequisiteId":"resource:av","kind":"requires"}], "provenance": "synthetic-brief" },
+    { "id": "commitment:sponsor", "description": "Deliver sponsor showcase before noon", "beneficiary": "sponsor", "owner": "sponsor-lead", "approver": "human:organizer-owner", "dueAt": "2026-11-06T12:00:00+05:30", "classification": "hard", "dependencies": [{"prerequisiteId":"commitment:kickoff","kind":"requires"},{"prerequisiteId":"venue:main","kind":"requires"}], "provenance": "synthetic-brief" },
+    { "id": "commitment:budget", "description": "Keep total commitment within INR 80,000, unless authorized exception", "beneficiary": "finance", "owner": "finance-lead", "approver": "human:organizer-owner", "dueAt": "2026-11-06T10:00:00+05:30", "classification": "negotiable", "dependencies": [{"prerequisiteId":"venue:main","kind":"requires"},{"prerequisiteId":"commitment:av","kind":"requires"}], "provenance": "synthetic-brief" },
+    { "id": "commitment:accessibility", "description": "Every selected hall must be accessible", "beneficiary": "attendees", "owner": "safety-lead", "approver": "human:organizer-owner", "dueAt": "2026-11-06T10:00:00+05:30", "classification": "hard", "dependencies": [{"prerequisiteId":"venue:main","kind":"requires"},{"prerequisiteId":"commitment:capacity","kind":"requires"}], "provenance": "synthetic-brief" }
+  ]
+}

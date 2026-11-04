@@ -1,0 +1,26 @@
+[
+  {
+    "id":"plan-a", "label":"Two halls, existing AV", "scenarioId":"event-430", "scenarioRevision":1, "rentedAvKits":0,
+    "sponsorShowcaseAt":"2026-11-06T11:00:00+05:30", "note":"Capacity fits, but the concurrent AV requirement does not",
+    "allocations": [
+      {"hallId":"hall:a","attendeeFrom":0,"attendeeTo":249,"start":"2026-11-06T10:00:00+05:30","end":"2026-11-06T10:45:00+05:30","avKits":1},
+      {"hallId":"hall:b","attendeeFrom":250,"attendeeTo":429,"start":"2026-11-06T10:00:00+05:30","end":"2026-11-06T10:45:00+05:30","avKits":1}
+    ]
+  },
+  {
+    "id":"plan-b", "label":"Two halls, rent second AV", "scenarioId":"event-430", "scenarioRevision":1, "rentedAvKits":1,
+    "sponsorShowcaseAt":"2026-11-06T11:00:00+05:30", "note":"Meets hard constraints, but INR 3,000 exception requires owner approval",
+    "allocations": [
+      {"hallId":"hall:a","attendeeFrom":0,"attendeeTo":249,"start":"2026-11-06T10:00:00+05:30","end":"2026-11-06T10:45:00+05:30","avKits":1},
+      {"hallId":"hall:b","attendeeFrom":250,"attendeeTo":429,"start":"2026-11-06T10:00:00+05:30","end":"2026-11-06T10:45:00+05:30","avKits":1}
+    ]
+  },
+  {
+    "id":"plan-c", "label":"Two sequential kickoff waves", "scenarioId":"event-430", "scenarioRevision":1, "rentedAvKits":0,
+    "sponsorShowcaseAt":"2026-11-06T11:45:00+05:30", "note":"One AV kit is sufficient, but the synchronized kickoff promise is violated",
+    "allocations": [
+      {"hallId":"hall:a","attendeeFrom":0,"attendeeTo":214,"start":"2026-11-06T10:00:00+05:30","end":"2026-11-06T10:30:00+05:30","avKits":1},
+      {"hallId":"hall:a","attendeeFrom":215,"attendeeTo":429,"start":"2026-11-06T10:45:00+05:30","end":"2026-11-06T11:15:00+05:30","avKits":1}
+    ]
+  }
+]
