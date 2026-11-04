@@ -86,7 +86,16 @@ export function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function json(path) { return JSON.parse(readFileSync(path, 'utf8')); }
+function json(path) {
+  const data = readFileSync(path, 'utf8');
+  try {
+    return JSON.parse(data);
+  } catch {
+    // Report filename only, never its contents (files may contain private data).
+    throw new Error('Recovery artifact is not valid JSON: ' + path.split(/[\\/]/).pop() +
+      '. No source file was changed.');
+  }
+}
 
 export function loadVerifiedArtifacts(root) {
   const dir = join(root, 'artifacts', 'event-430-recovery-live', EVIDENCE.executionKey);
@@ -140,9 +149,67 @@ export function loadVerifiedArtifacts(root) {
   };
 }
 
+function findJsonObjectInText(text) {
+  // Some ACP releases prefix MCP result JSON with printable metadata such as
+  // "Created At: ...". Inspect the tool-owned payload without logging any text.
+  if (typeof text !== 'string' || text.length > 2_000_000) return null;
+  const matches = text.match(/```(?:json)?\s*([\s\S]*?)```/gi);
+  const candidates = [text];
+  if (matches) {
+    for (const block of matches) candidates.push(block.replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim());
+  }
+  for (const candidate of candidates) {
+    try { return JSON.parse(candidate.trim()); } catch { /* prefix or suffix present */ }
+    for (let start = 0, tries = 0; start < candidate.length && tries < 16; start++) {
+      if (candidate[start] !== '{') continue;
+      tries++;
+      let depth = 0, quoted = false, escaped = false;
+      for (let end = start; end < candidate.length; end++) {
+        const ch = candidate[end];
+        if (quoted) {
+          if (escaped) escaped = false;
+          else if (ch === '\\') escaped = true;
+          else if (ch === '"') quoted = false;
+        } else if (ch === '"') quoted = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}' && --depth === 0) {
+          try { return JSON.parse(candidate.slice(start, end + 1)); }
+          catch { break; }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function recoverStructuredToolResult(content, depth = 0) {
+  if (depth > 5 || content == null) return null;
+  if (typeof content === 'string') {
+    const parsed = findJsonObjectInText(content);
+    return parsed === null ? null : recoverStructuredToolResult(parsed, depth + 1);
+  }
+  if (Array.isArray(content)) {
+    for (const value of content) {
+      const found = recoverStructuredToolResult(value, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof content !== 'object') return null;
+  if (typeof content.exit_code === 'number' && typeof content.success === 'boolean' &&
+      typeof content.stdout === 'string') return content;
+  // ACP/MCP wrappers can wrap the result as text blocks or under a data/result key.
+  for (const key of ['content', 'result', 'data', 'output', 'tool_result', 'text']) {
+    if (content[key] != null) {
+      const found = recoverStructuredToolResult(content[key], depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 export function extractVerifiedAcpTranscript(text) {
-  // Parse only the two recorded tool steps. Never display or publish the raw ACP
-  // transcript: other steps can contain authentication or personal information.
+  // Extract only known model/tool steps. No raw transcript data is emitted or logged.
   const lines = text.split(/\r?\n/).filter(Boolean);
   let invocation = null, result = null;
   for (const line of lines) {
@@ -152,32 +219,40 @@ export function extractVerifiedAcpTranscript(text) {
     if (parsed?.step_index === 108) result = parsed;
   }
   if (!invocation || !result) {
-    throw new Error('ACP transcript is missing the recorded execution steps 107 and 108.');
+    throw new Error('ACP transcript is missing recorded steps 107 and 108.');
+  }
+  if (invocation.source !== 'MODEL' || result.source !== 'TOOL' ||
+      invocation.type !== 'PLANNER_RESPONSE' || result.type !== 'MCP_TOOL') {
+    throw new Error('ACP steps 107–108 are not a model tool invocation and tool-owned result.');
   }
   const calls = invocation.tool_calls ?? [];
   const call = calls.find(x => x.name === 'call_mcp_tool' &&
     String(x.args?.ToolName).includes('cascade_execute_recovery'));
-  if (!call ||
-      !String(call.args?.Arguments ?? '').includes(EVIDENCE.approvalPost)) {
-    throw new Error('ACP step 107 did not contain the expected model-generated Switch recovery call.');
+  if (!call || !String(call.args?.Arguments ?? '').includes(EVIDENCE.approvalPost)) {
+    throw new Error('ACP step 107 is missing the real Switch recovery call and approval post ID.');
   }
-  const content = result.content;
-  const output = typeof content === 'object' && content !== null
-    ? content
-    : typeof content === 'string' ? JSON.parse(content) : null;
-  if (output?.exit_code !== 0 || output?.success !== true ||
-      !String(output?.stdout).includes('Already Applied: true') ||
-      !String(output?.stdout).includes('State: APPLIED_LOCALLY') ||
-      !String(output?.stdout).includes(EVIDENCE.planHash)) {
-    throw new Error('ACP step 108 is not a successful idempotent CASCADE recovery result.');
+  const output = recoverStructuredToolResult(result.content ?? result.result ?? result.output);
+  if (!output) {
+    const kind = Array.isArray(result.content) ? 'array' : typeof result.content;
+    throw new Error(
+      'ACP step 108 has no structured recovery tool result (content type: ' + kind +
+      '). It may contain human-readable metadata such as Created At. ' +
+      'The recorder will not treat unstructured text as proof of execution. ' +
+      'Keep the raw transcript private; inspect its step 108 format locally.'
+    );
+  }
+  if (output.exit_code !== 0 || output.success !== true ||
+      !output.stdout.includes('Already Applied: true') ||
+      !output.stdout.includes('State: APPLIED_LOCALLY') ||
+      !output.stdout.includes(EVIDENCE.planHash)) {
+    throw new Error('ACP step 108 does not prove a successful idempotent recovery execution.');
   }
   return Object.freeze({
     sessionId: EVIDENCE.acpSession,
-    modelToolStep: 107,
-    toolResultStep: 108,
+    modelToolStep: 107, toolResultStep: 108,
     tool: 'cascade_execute_recovery',
     exitCode: 0, state: 'APPLIED_LOCALLY', alreadyApplied: true,
-    evidenceType: 'sanitized fields extracted from local Antigravity ACP transcript',
+    evidenceType: 'verified, sanitized fields from local Antigravity ACP tool result',
   });
 }
 
