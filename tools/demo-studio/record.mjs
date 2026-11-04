@@ -2,7 +2,6 @@ import { chromium } from 'playwright';
 import ffmpeg from 'ffmpeg-static';
 import ffprobePackage from 'ffprobe-static';
 import { spawnSync } from 'node:child_process';
-import { createInterface } from 'node:readline/promises';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,18 +77,41 @@ function loadLocalEvidence() {
   return { artifacts, transcript, transcriptStatus };
 }
 
-async function promptLogin(page) {
-  log('One-time sign-in required. Use the Chromium window to log into YOUR local Mattermost.');
-  log('No username or password is requested or stored by this script.');
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    await rl.question('After you see Town Square in Chromium, press Enter HERE to continue... ');
-  } finally { rl.close(); }
-  await page.goto(base + '/switch/channels/town-square', { waitUntil: 'domcontentloaded', timeout: 30000 });
+async function waitForMattermostLogin(context, page) {
+  log('One-time sign-in required in the NEW Chromium window opened by this recorder.');
+  log('Your regular Chrome and Mattermost Desktop sessions DO NOT share this browser profile.');
+  log('Sign in to Mattermost in that Chromium window. Do not press Enter in PowerShell.');
+  log('The recorder automatically detects the authenticated session and continues.');
+  // Do not interrupt the sign-in page with a forced navigation; SSO / local
+  // login may need multiple redirects, 2FA or a manual session refresh.
+  const deadline = Date.now() + 5 * 60_000;
+  let attempts = 0;
+  while (Date.now() < deadline) {
+    const me = await getJson(context, '/api/v4/users/me').catch(() => null);
+    if (me?.id && typeof me.id === 'string') {
+      log('Authenticated Mattermost session detected in dedicated Chromium.');
+      // Only navigate after authentication is established.
+      await page.goto(base + '/switch/channels/town-square', {
+        waitUntil: 'domcontentloaded', timeout: 30000,
+      });
+      return me;
+    }
+    attempts++;
+    if (attempts % 15 === 0) {
+      log('Still awaiting Mattermost sign-in in the recorder Chromium window. ' +
+        'Check the login page there; no credentials are needed in this terminal.');
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  throw new Error('Mattermost login was not detected in the recorder Chromium window. ' +
+    'Sign in inside that window (not normal Chrome or Mattermost Desktop), ' +
+    'then rerun the recorder. No local evidence was changed.');
 }
 
 async function getJson(context, endpoint) {
-  const res = await context.request.get(base + endpoint, { timeout: 20000, failOnStatusCode: false });
+  const res = await context.request.get(base + endpoint, {
+    timeout: 8000, failOnStatusCode: false,
+  });
   if (!res.ok()) return null;
   try { return await res.json(); } catch { return null; }
 }
@@ -150,9 +172,7 @@ async function captureEvidence() {
     await page.goto(base + '/switch/channels/town-square', { waitUntil: 'domcontentloaded', timeout: 30000 });
     let check = await getJson(context, '/api/v4/users/me');
     if (!check?.id) {
-      await promptLogin(page);
-      check = await getJson(context, '/api/v4/users/me');
-      if (!check?.id) throw new Error('Mattermost login is not established in the dedicated Chromium profile.');
+      check = await waitForMattermostLogin(context, page);
     }
     const evidence = [];
     const entries = [
