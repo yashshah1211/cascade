@@ -25,7 +25,7 @@ If `git switch` complains about local modifications, **stop** and preserve your 
 3. Make sure **Switch Console and Mattermost** are running and the old event-430 Town Square conversation is visible at `http://localhost:59113`.
 4. **Double-click `record-demo.cmd`** in the repository root.
 
-The launcher installs isolated Playwright, Chromium, FFmpeg and FFprobe packages as needed, builds the TypeScript engine, verifies the existing receipt and ACP transcript, and opens a dedicated Chromium window to read the Mattermost posts.
+The launcher installs isolated Playwright, Chromium, FFmpeg and FFprobe packages as needed, builds the TypeScript engine, verifies the existing receipt, **optionally** verifies the ACP transcript, and opens a dedicated Chromium window to read the Mattermost posts. If the historical ACP transcript uses an unknown format, the recorder omits that optional scene, labels the omission, and continues with verified artifacts and authenticated Mattermost posts.
 
 **Only on the first run**, Chromium may ask you to sign into Mattermost. Do so manually in that browser window, return to the command window and press Enter. Credentials are never requested by CASCADE Studio or placed in repository files.
 
@@ -52,7 +52,7 @@ Each scene has locally synthesized Windows narration, branded captions and subtl
 
 ## Mandatory evidence preconditions
 
-This particular one-click preset is deliberately fixed to the **actual previously verified local run**. The script stops rather than inventing outputs if any mandatory check fails.
+This particular one-click preset is deliberately fixed to the **actual previously verified local run**. The script stops rather than inventing outputs if any **mandatory** check fails. The historical ACP tool-call scene is optional: it is included only if strict transcript verification succeeds.
 
 | Source | Requirement |
 | --- | --- |
@@ -120,13 +120,15 @@ This tool is Windows-specific for built-in text-to-speech. The core CASCADE engi
 
 **Mattermost login required:** Sign into the Chromium window, then press Enter in the command window. Later runs reuse this login until it expires.
 
+**Missing or unfamiliar ACP transcript:** No need to rerun AGY or fabricate an agent tool call. The recorder can proceed with verified Mattermost posts and local execution artifacts, omitting the optional agent-replay scene. To share a **safe metadata-only** diagnostic, run `record-demo.cmd --inspect-acp` and share only the printed field-type summary (no raw transcript). The studio never displays unverified execution trace content.
+
 **Missing transcript:** Do not run AGY or manufacture a tool result. Check the default ACP file path or set `CASCADE_DEMO_ACP_TRANSCRIPT` to the real file.
 
 **Missing artifacts:** You may be using a new clone. Switch to the original local checkout that generated the receipt; `artifacts/` is intentionally not committed.
 
 **Missing or inaccessible post:** Make sure the local Mattermost server is running and that the authenticated account belongs to team `switch`. The script checks the actual post content and author, not just the URL.
 
-**Mattermost UI changed:** Authenticated API validation may pass but the screenshot step may fail if the actual post is not visible. Open the given permalink inside the Chromium window and inspect the thread. Avoid editing the code to bypass visual verification.
+**Mattermost UI changed:** After authenticating the post through the API, the recorder attempts to screenshot the exact DOM post. If the installed version uses different markup, it automatically switches to an **explicitly labeled authenticated-API summary card**, not a fabricated screenshot. Confirm the final video labels are accurate.
 
 **Windows voice unavailable:** Install an English Windows speech voice under Settings → Time & language → Speech. The `speak.ps1` script relies on the built-in `System.Speech` voices.
 
