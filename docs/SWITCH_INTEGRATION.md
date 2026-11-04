@@ -216,32 +216,39 @@ The Antigravity ACP agent executes the recovery via Switch tool `cascade_execute
 
 ---
 
-## 7. Reproducible Integration Setup & Reversal Guide
+## 7. Reproducible Integration Setup & Safe Management Guide
 
-To ensure reproducibility across environments without manual vendor file tampering, CASCADE provides a dedicated setup script: [`scripts/setup-switch-operations.py`](file:///C:/Users/yashs/Downloads/CASCADE_Day1_MVP_2026-11-04/cascade/scripts/setup-switch-operations.py).
+To ensure reproducibility, non-destructive operation, and complete reversibility across environments without manual vendor file tampering, CASCADE provides a dedicated setup script: [`scripts/setup-switch-operations.py`](file:///C:/Users/yashs/Downloads/CASCADE_Day1_MVP_2026-11-04/cascade/scripts/setup-switch-operations.py).
 
-### A. Reproducible Setup Procedure
+### A. Safety Guarantees & Features
+- **Explicit Target Selection**: Requires `--target <path>` or `SWITCH_DEFINITIONS_PATH` environment variable. If omitted, discovers candidate installations and lists them without modifying any files.
+- **Automated Backup**: Generates `<target>.bak` before performing any modifications.
+- **Bounded Block Replacement**: Replaces only code within `# ── CASCADE Deterministic Operations ...` and `# ── END CASCADE Deterministic Operations ──`, preserving all preceding and succeeding vendor code.
+- **Dry-Run Capability**: `--dry-run` simulates setup or rollback without modifying any files on disk.
+- **Safe Rollback**: `--rollback` cleanly restores original `definitions.py` from `.bak` (or removes the marked block).
+- **Zero Hardcoded Secrets**: Uses dynamic path discovery and environment variables (`CASCADE_REPO_DIR`, `CASCADE_SWITCH_TOKEN`). Never logs or displays credentials.
+
+### B. Setup & Rollback Procedures
+
 ```powershell
 # 1. Build CASCADE TypeScript CLI
 npm run build
 
-# 2. Run Switch native operations registration script
-python scripts/setup-switch-operations.py
+# 2. Dry run simulation (safe test)
+python scripts/setup-switch-operations.py --target "C:\Users\yashs\AppData\Roaming\switchdash\local-switch-server\native\switch-core\0.31.0\src\core\switch_core\bridges\agent\operations\definitions.py" --dry-run
 
-# 3. Restart Switch Core service to load updated operations
+# 3. Apply native operations with automatic backup
+python scripts/setup-switch-operations.py --target "C:\Users\yashs\AppData\Roaming\switchdash\local-switch-server\native\switch-core\0.31.0\src\core\switch_core\bridges\agent\operations\definitions.py"
+
+# 4. Safe rollback anytime (restores .bak)
+python scripts/setup-switch-operations.py --target "C:\Users\yashs\AppData\Roaming\switchdash\local-switch-server\native\switch-core\0.31.0\src\core\switch_core\bridges\agent\operations\definitions.py" --rollback
 ```
 
-The script automatically:
-- Discovers active `definitions.py` paths in standard Switch installation directories.
-- Injects or updates `@operation cascade_evaluate_recovery` and `@operation cascade_execute_recovery`.
-- Enforces strict input validation, correct executable path (`dist/src/cli/recover.js`), and exit code failure propagation.
-- Syncs ACP tool schemas to the local Antigravity ACP brain directory.
-
-### B. Local Installation Modifications & Reversal Inventory
+### C. Local Installation Modifications & Reversal Inventory
 
 | Component | Path | Modification | Reversal Procedure |
 | :--- | :--- | :--- | :--- |
-| **Switch Core Operations** | `definitions.py` in `switch_core/bridges/agent/operations/` | Added `@operation cascade_evaluate_recovery` and `cascade_execute_recovery` | Remove the `# ── CASCADE Deterministic Operations` block from `definitions.py` |
+| **Switch Core Operations** | `definitions.py` in `switch_core/bridges/agent/operations/` | Added `@operation cascade_evaluate_recovery` and `cascade_execute_recovery` | Run `python scripts/setup-switch-operations.py --target <path> --rollback` (or restore `.bak`) |
 | **ACP Tool Schemas** | `.local/state/switch/antigravity-acp/.../mcp/switch/` | Registered `cascade_evaluate_recovery.json` and `cascade_execute_recovery.json` | Delete `cascade_*.json` from the brain MCP directory |
 | **PostgreSQL Database** | `rooms` and `room_agents` tables (`switch` DB on port 59114) | Added room mapping `6fe42a1c-6f29-45de-8aca-da763634216e` and assigned agent | `DELETE FROM room_agents WHERE room_id = '6fe42a1c-6f29-45de-8aca-da763634216e'; DELETE FROM rooms WHERE id = '6fe42a1c-6f29-45de-8aca-da763634216e';` |
 | **Host PATH** | Windows User `Path` | Added `C:\Users\yashs\tools\antigravity-acp\bin` | Remove directory from User `Path` |
