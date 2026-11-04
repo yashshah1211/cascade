@@ -162,3 +162,105 @@ test('Demo: does not allow output path traversal outside project', () => {
 test('Demo: HTML sanitization is deterministic', () => {
   assert.equal(safeHtml('A&B <"test">'), 'A&amp;B &lt;&quot;test&quot;&gt;');
 });
+
+
+test('Demo: accepts metadata-prefixed structured MCP output without copying the prefix', () => {
+  const structured = {
+    exit_code: 0,
+    success: true,
+    stdout: 'Plan Hash: ' + EVIDENCE.planHash +
+      '\nState: APPLIED_LOCALLY\nAlready Applied: true\n',
+    stderr: '',
+    private_token: 'should-not-appear',
+  };
+  const entries = [
+    {
+      step_index: 107, source: 'MODEL', type: 'PLANNER_RESPONSE',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: 'cascade_execute_recovery', Arguments: '{"approval_message_id":"' + EVIDENCE.approvalPost + '"}' },
+      }],
+    },
+    {
+      step_index: 108, source: 'TOOL', type: 'MCP_TOOL',
+      content: 'Created At: 2026-11-04T18:30:00Z\nTool response:\n' + JSON.stringify(structured) + '\n',
+    },
+  ];
+  const result = extractVerifiedAcpTranscript(entries.map(JSON.stringify).join('\n'));
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.alreadyApplied, true);
+  assert.ok(!JSON.stringify(result).includes('private_token'));
+});
+
+test('Demo: accepts nested MCP content text blocks with a real structured result', () => {
+  const entries = [
+    {
+      step_index: 107, source: 'MODEL', type: 'PLANNER_RESPONSE',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: 'cascade_execute_recovery', Arguments: EVIDENCE.approvalPost },
+      }],
+    },
+    {
+      step_index: 108, source: 'TOOL', type: 'MCP_TOOL',
+      content: [{ type: 'text', text: 'Created At:\n' + JSON.stringify({
+        exit_code: 0, success: true,
+        stdout: 'Plan Hash: ' + EVIDENCE.planHash + '\nState: APPLIED_LOCALLY\nAlready Applied: true',
+      }) }],
+    },
+  ];
+  assert.equal(extractVerifiedAcpTranscript(entries.map(JSON.stringify).join('\n')).exitCode, 0);
+});
+
+test('Demo: rejects plain ACP metadata that contains no actual structured execution proof', () => {
+  const entries = [
+    {
+      step_index: 107, source: 'MODEL', type: 'PLANNER_RESPONSE',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: 'cascade_execute_recovery', Arguments: EVIDENCE.approvalPost },
+      }],
+    },
+    {
+      step_index: 108, source: 'TOOL', type: 'MCP_TOOL',
+      content: 'Created At: 2026-11-04 20:00\nThe agent said success.',
+    },
+  ];
+  assert.throws(() => extractVerifiedAcpTranscript(entries.map(JSON.stringify).join('\n')),
+    /no structured recovery tool result/i);
+});
+
+test('Demo: rejects a MODEL-authored fake tool result even when it contains a success JSON', () => {
+  const entries = [
+    {
+      step_index: 107, source: 'MODEL', type: 'PLANNER_RESPONSE',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: 'cascade_execute_recovery', Arguments: EVIDENCE.approvalPost },
+      }],
+    },
+    {
+      step_index: 108, source: 'MODEL', type: 'MCP_TOOL',
+      content: {
+        exit_code: 0, success: true,
+        stdout: 'Plan Hash: ' + EVIDENCE.planHash + '\nState: APPLIED_LOCALLY\nAlready Applied: true',
+      },
+    },
+  ];
+  assert.throws(() => extractVerifiedAcpTranscript(entries.map(JSON.stringify).join('\n')),
+    /not a model tool invocation and tool-owned result/);
+});
+
+test('Demo: rejects bad local JSON with filename-only error instead of leaking contents', () => {
+  const {root,path} = fixtureRoot();
+  try {
+    writeFileSync(join(path, 'receipt.json'), 'Created At: not a JSON document. SECRET_TOKEN=hidden');
+    assert.throws(() => loadVerifiedArtifacts(root), (error) => {
+      assert.match(error.message, /receipt\.json/);
+      assert.ok(!error.message.includes('SECRET_TOKEN'));
+      return true;
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
