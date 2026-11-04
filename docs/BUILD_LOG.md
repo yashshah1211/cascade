@@ -33,12 +33,31 @@
 - **Field Whitelisting:** Rejects unexpected fields (e.g. `externalActionCompleted`) to prevent spoofed external execution semantics.
 - **Idempotency & Concurrency:** Preserved atomic publication and exact repeat execution returning `alreadyApplied: true` across both standard and concurrent execution branches.
 
-**Blockers**
+**Blockers & Transition Status**
 
-- No live Switch room round trip has been verified. The previous Switch Console on Windows had repeated `post_message` failures.
-- Production message verifier not implemented. The engine's offline verifier tests are not integration evidence.
-- Repo not yet created/pushed to the user's GitHub. The downloadable package is a portable source bundle.
+- Official GitHub repository created: `https://github.com/yashshah1211/cascade`.
+- Mission 01 PR #1 merged into `main` (`553145c`).
+- Clean branch initialized for Mission 02: `feature/mission-02-switch-integration`.
 
-**Next acceptance gate**
+---
 
-One live Switch/Mattermost channel message from a human, agent receives it, invokes the CLI, and successfully posts a real reply. Retain screenshots/logs. Do not represent standalone operation as a Switch submission.
+## Mission 02 — Phase 1 Integration Gate Diagnostic (2026-11-04)
+
+**Objective:** Verify real Switch collaboration gate before proceeding to production verifier and end-to-end execution.
+
+**Diagnostic findings:**
+1. **Repository & CI Baseline:** PR #1 (`feature/mission-01-harden-recovery-engine`) merged into `main` (`553145c`); branch `feature/mission-02-switch-integration` initialized. 41/41 automated tests pass.
+2. **Installed Switch Console Inspection:**
+   - Version: 0.31.0 (win32-x64 Electron binary at `C:\Users\yashs\AppData\Local\Programs\Switch Console\Switch Console.exe`).
+   - Switch local server runtime: native python/postgres, but Mattermost service is defined as a Docker container (`mattermost-compose.yml: image: mattermost/mattermost-team-edition:11.9.0` on port 59113).
+3. **Agent Support & Antigravity Compatibility:**
+   - Switch Console's provider precheck (`provider-precheck.json`) registers `antigravity` as `installed: false` (`provider_not_installed`).
+   - Switch Console's agent controller (`agent-controller.mjs`) requires `antigravity-acp` (Agent Client Protocol) and expects an ACP token file. Standard Antigravity (`agy` / `antigravity-ide`) is explicitly rejected (`"The selected executable is the old Antigravity CLI. Install and select antigravity-acp in provider setup."`).
+   - `antigravity-acp` installer scripts embedded in Switch Console only support macOS and Linux; no Windows package exists.
+   - User directive prohibits substituting Codex without authorization.
+4. **Service Status & Constraints:**
+   - Docker daemon is not running; port 59113 (Mattermost) and Switch local server ports (59111-59114) are offline.
+   - User constraint explicitly forbids starting or changing Docker, Switch Console, Supabase, or external services.
+5. **Historical Windows Switch Errors:**
+   - Past run logs (`switch-console.log` / `sdk-sessions`) show recurring tool failures: `Shared SDK host failed with exit code 1`, `HOST_FAULTED: Provider execution failed`, and model 400 errors (`The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account`).
+6. **Gate Verdict:** **BLOCKED at Phase 1 Integration Gate.** In accordance with Mission 02 instructions ("Do not proceed to the remaining phases unless this gate works. If Windows Switch integration fails, perform one bounded diagnostic pass, collect sanitized errors and report the blocker"), downstream phases (Phase 2 & Phase 3) remain closed to prevent fabricating synthetic messages as genuine Switch collaboration.
