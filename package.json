@@ -2,14 +2,14 @@
   "name": "cascade-commitment-recovery",
   "version": "0.1.0",
   "private": true,
-  "description": "CASCADE \u2014 deterministic commitment recovery engine for Flip the Switch 2026",
+  "description": "CASCADE — deterministic commitment recovery engine for Flip the Switch 2026",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/tests/*.test.js",
+    "test": "npm run build && node --test dist/tests/*.test.js tools/demo-studio/tests.test.mjs",
     "demo": "npm run build && node dist/src/cli/main.js demo",
     "inspect": "npm run build && node dist/src/cli/main.js inspect",
     "dashboard": "npm run build && node dist/src/dashboard/server.js",
