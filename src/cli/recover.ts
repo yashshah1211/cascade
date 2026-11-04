@@ -27,7 +27,6 @@ async function main() {
     serverId,
     userMap: {
       'oh47xmfeafyapbjyhhri6bucae': humanApproverId,
-      'user': humanApproverId,
     },
     roomMap: {
       [channelId]: roomId,
@@ -65,7 +64,11 @@ async function main() {
 
   if (approvalMsgId) {
     console.log(`\nVerifying live Switch approval message ID: ${approvalMsgId}...`);
-    const outputRoot = resolve(process.cwd(), 'artifacts/event-430-recovery');
+    const outDirArgIdx = args.indexOf('--output-dir');
+    const outDirArg = outDirArgIdx !== -1 ? args[outDirArgIdx + 1] : undefined;
+    const outputRoot = outDirArg
+      ? resolve(process.cwd(), outDirArg)
+      : resolve(process.cwd(), process.env.CASCADE_OUTPUT_DIR ?? 'artifacts/event-430-recovery-live');
 
     const result = await executeVerifiedRecovery({
       scenario,
