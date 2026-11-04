@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/tests/*.test.js tools/demo-studio/tests.test.mjs",
+    "test": "npm run build && node --check tools/demo-studio/record.mjs && node --check tools/demo-studio/render.mjs && node --check tools/demo-studio/lib.mjs && node --test dist/tests/*.test.js tools/demo-studio/tests.test.mjs",
     "demo": "npm run build && node dist/src/cli/main.js demo",
     "inspect": "npm run build && node dist/src/cli/main.js inspect",
     "dashboard": "npm run build && node dist/src/dashboard/server.js",
