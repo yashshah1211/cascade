@@ -1,6 +1,7 @@
 param(
     [switch]$CheckOnly,
-    [switch]$CaptureOnly
+    [switch]$CaptureOnly,
+    [switch]$InspectAcp
 )
 $ErrorActionPreference = "Stop"
 $toolDir = $PSScriptRoot
@@ -39,7 +40,7 @@ try {
         & npm.cmd install --prefix "tools\demo-studio" --no-audit --no-fund
         if ($LASTEXITCODE -ne 0) { throw "Recorder npm install failed." }
     }
-    if (-not $CheckOnly) {
+    if (-not $CheckOnly -and -not $InspectAcp) {
         Write-Host "[Setup] Ensuring dedicated Chromium browser is installed..."
         Push-Location (Join-Path $repoRoot "tools\demo-studio")
         try {
@@ -51,11 +52,12 @@ try {
     $arguments = @("tools\demo-studio\record.mjs")
     if ($CheckOnly) { $arguments += "--check-only" }
     if ($CaptureOnly) { $arguments += "--capture-only" }
+    if ($InspectAcp) { $arguments += "--inspect-acp" }
     & node @arguments
     if ($LASTEXITCODE -ne 0) { throw "Recorder stopped because evidence was unavailable or rendering failed." }
 
     Write-Host ""
-    if (-not $CheckOnly -and -not $CaptureOnly) {
+    if (-not $CheckOnly -and -not $CaptureOnly -and -not $InspectAcp) {
         $outputFile = Join-Path $repoRoot "demo-output\CASCADE_FlipTheSwitch_Demo.mp4"
         Write-Host "SUCCESS! MP4 saved to:"
         Write-Host $outputFile
