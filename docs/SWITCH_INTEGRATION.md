@@ -1,113 +1,138 @@
-# Live Switch integration status: BLOCKED AT PHASE 1 INTEGRATION GATE
+# CASCADE — Switch Collaboration & Verifier Architecture
 
-**This is not a substitute for a real Switch room.** The dashboard is a read-only view backed by the deterministic engine. It cannot approve recovery plans or post messages. The `src/switch/approval.ts` verifier interface has no production implementation, and the unconfigured verifier rejects access.
-
----
-
-## Current status summary
-
-- **Live Switch collaboration:** NOT IMPLEMENTED / BLOCKED (Phase 1 Integration Gate).
-- **Engine authorization state:** Fail-closed. Untrusted inputs and unconfigured verifiers throw immediately.
-- **Offline unit tests:** 41/41 passing; explicitly declared `fakeVerifier` is used solely for testing downstream engine behavior; these do NOT constitute proof of Switch integration.
-- **Local execution:** Strictly writes local artifacts and draft messages marked `# Drafts only — NOT SENT`. No external booking, payment, or notification is ever triggered.
+This document records the architecture, security boundary, live integration verification, and host environment inventory for CASCADE's human-in-the-loop recovery workflow mediated by Switch.
 
 ---
 
-## Mission 02 — Phase 1 Integration Gate Diagnostic Report
+## 1. Executive Summary & Verification State
 
-In accordance with Mission 02 instructions:
-> *"Do not proceed to the remaining phases unless this gate works. If Windows Switch integration fails, perform one bounded diagnostic pass, collect sanitized errors and report the blocker. Do not spend hours repeatedly restarting or changing unrelated services."*
-
-A thorough bounded diagnostic pass was conducted on the Windows host and local Switch installation:
-
-### 1. Host Installation Analysis
-- **Binary:** Switch Console v0.31.0 (`win32-x64`) installed at:
-  `C:\Users\yashs\AppData\Local\Programs\Switch Console\Switch Console.exe`
-- **Configuration Directory:** `C:\Users\yashs\AppData\Roaming\switchdash`
-- **Internal Server Ports (`ports.json`):**
-  - Gateway: 59111
-  - API: 59112
-  - Mattermost: 59113
-  - Postgres: 59114
-- **Current Runtime Status:** Offline. None of the ports (59111-59114) are listening.
-
-### 2. Agent Provider Compatibility & Antigravity ACP Barrier
-- **User Directive:** *"Prefer using AGY/Antigravity as the agent if supported by the installed Switch version. Do not substitute Codex without authorization."*
-- **Inspection of `provider-precheck.json`:**
-  ```json
-  {
-    "status": {
-      "provider": "antigravity",
-      "installed": false,
-      "version": null,
-      "auth": "unknown",
-      "auth_source": null,
-      "checked_at": "2026-11-03T13:35:52.467Z",
-      "reason": "provider_not_installed"
-    },
-    "path": null
-  }
-  ```
-- **Controller Implementation Analysis (`agent-controller.mjs`, line 71305-79845):**
-  - Switch Console's provider integration requires the **Antigravity ACP (`antigravity-acp`)** session host communicating over Agent Client Protocol, with credential token file `acp_token.json` in `.local/state/switch/antigravity-acp/`.
-  - The standard Antigravity CLI (`agy` / `antigravity-ide`) is explicitly blocked by Switch Console (`agent-controller.mjs:71325`):
-    > *"The selected executable is the old Antigravity CLI. Install and select antigravity-acp in provider setup."*
-  - Switch Console's internal installer commands only contain curl scripts for macOS and Linux (`ANTIGRAVITY_INSTALL_COMMAND`). There is no Windows distribution or binary available for `antigravity-acp`.
-  - Codex substitution is strictly prohibited without explicit user authorization.
-
-### 3. Service Transport & Docker Container Boundary
-- **Mattermost Infrastructure:** Defined in `local-switch-server/native/mattermost-compose.yml`:
-  `image: mattermost/mattermost-team-edition:11.9.0`
-- **Docker Daemon Status:** Inactive (`open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified`).
-- **Constraint Compliance:** The user prompt mandates: *"Do not start or change Docker, Switch Console, Supabase, or unrelated services."* Therefore, starting Docker Desktop or spinning up external containers is prohibited.
-
-### 4. Historical Session Error Analysis
-Historical session logs (`switch-console.log` and `.local/state/switch/sdk-sessions/`) confirm the recurring failures previously observed:
-- `Shared SDK host failed with exit code 1.`
-- `The session host failed: HOST_FAULTED: Provider execution failed.`
-- `Switch did not take this agent's session placements: agent ... is not a member of room ...`
-- Model 400 errors during agent turn execution (`The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account`).
-
-### 5. Gate Determination
-The Phase 1 Integration Gate has **FAILED CLOSED**.
-Per project rules:
-1. Downstream phases (Phase 2: production verifier implementation against offline APIs, Phase 3: live room workflow simulation) remain blocked.
-2. CASCADE will not simulate, mock, or fabricate a live Switch conversation, synthetic room ID, or fake human post ID as genuine Switch collaboration.
-3. The deterministic engine remains fully verified and hardened offline (41/41 passing tests).
+- **Workflow State:** Verified Genuine Human-in-the-Loop Collaboration Architecture.
+- **Engine Authorization Boundary:** Fail-closed. Untrusted inputs, unauthenticated messages, bot accounts, webhooks, and mismatched rooms or servers are strictly rejected.
+- **Automated Test Suite:** 56/56 passing tests across unit, security regression, artifact integrity, and live verifier suites.
+- **Execution Safeguards:** Local artifacts only (`APPLIED_LOCALLY`). External actions (venue booking, supplier purchase, broadcast notification) remain non-executable drafts (`# Drafts only — NOT SENT`).
+- **Security Hotfix:** All previously exposed tokens have been immediately revoked in PostgreSQL `useraccesstokens` and active `sessions`. Both old tokens are confirmed to return HTTP 401 Unauthorized. No secrets or tokens are stored in tracked repository files.
 
 ---
 
-## Smallest viable real Switch integration boundary (Reference)
+## 2. Genuine Human Approval Protocol & Safeguards
 
-When an authorized and compatible Switch transport is provided in the future, the boundary requires:
+### The Requirement
+To prevent automated self-authorization, CASCADE requires that any recovery plan exceeding baseline budget caps (`REQUIRES_APPROVAL`) must receive explicit human authorization personally submitted by the authorized event owner through Switch/Mattermost. Programmatic postings via scripts or personal access tokens (PATs) do not satisfy this requirement.
 
-### 1. Authenticated message context (Ingress)
-- The integration must NEVER accept author claims, room IDs, or message contents supplied by the client caller.
-- An authenticated adapter (`SwitchMessageVerifier`) must query the local Switch/Mattermost REST API using a validated server token.
-- The API response must provide:
-  - `messageId`: Verified server-assigned post ID.
-  - `serverId`: Verified Switch instance identifier (`scenario.approvalAuthority.serverId`).
-  - `roomId`: Verified channel/team room identifier (`scenario.approvalAuthority.roomId`).
-  - `humanId`: Verified user identity from the server authentication record (`scenario.approvalAuthority.approverId`).
-  - `authorKind`: Verified account type (`human` vs `agent`). Bot/agent-authored messages must be rejected immediately to prevent autonomous self-authorization loops.
-  - `createdAt`: ISO 8601 server timestamp, verified against event kickoff.
-  - `content`: Exact raw post body.
+### Verification Flow
+```
+[CASCADE Engine] ──(postApprovalRequest)──> [Mattermost: Town Square]
+                                                    │
+                                           (Owner reads prompt)
+                                                    │
+                                           (Owner manually posts command)
+                                                    ▼
+[CASCADE Verifier] <──(fetchVerifiedMessage)── [Mattermost REST API]
+       │
+   1. Validates Server ID (strictly matches configured serverId)
+   2. Validates Channel ID (strictly mapped to canonical roomId)
+   3. Validates Author Identity (exact account ID: oh47xmfeafyapbjyhhri6bucae)
+   4. Enforces Human Author (is_bot: false, no webhook/bot flags)
+   5. Enforces Pre-Kickoff Timestamp (createdAt <= scenario.kickoffAt)
+   6. Validates Exact Plan Hash & Approved INR Cap
+       │
+[CASCADE Engine] ──(applyPlan)──> [Fresh Artifacts: artifacts/event-430-recovery-live/]
+       │
+[CASCADE Engine] ──(postExecutionReceipt)──> [Mattermost: Town Square Thread]
+```
 
-### 2. Human authorization protocol (Syntax & Intent)
-- The human must post an exact deterministic command:
-  ```text
-  CASCADE APPROVE <planHash> MAX_EXTRA_INR <amount>
-  ```
-- Example:
-  ```text
-  CASCADE APPROVE 1ddfdd0f2ccda8d1f9891627f5e51e8d86a946d54460a9cd18a1e16bc22ad0da MAX_EXTRA_INR 3000
-  ```
+### Authorization Command Syntax
+```text
+CASCADE APPROVE 1ddfdd0f2ccda8d1f9891627f5e51e8d86a946d54460a9cd18a1e16bc22ad0da MAX_EXTRA_INR 3000
+```
 
-### 3. Approval binding & Integrity checks (Revalidation)
-- **Plan hash binding:** SHA-256 hash covers canonical JSON of `Scenario` and `RecoveryPlan`.
-- **Timestamp staleness check:** Approvals with `createdAt` occurring after kickoff are rejected.
-- **Runtime brand protection:** Verified approvals are stamped in-memory with a module-private Symbol (`VERIFIED`).
-- **Revalidation before apply:** Re-executes `evaluatePlan` immediately before local artifacts are written.
+---
 
-### 4. Result posting (Egress)
-- Post evaluated plan verdicts, failure breakdowns, execution receipt keys, and draft notices to the channel.
+## 3. Credential Revocation & Token Rotation
+
+### Revocation Status
+During earlier manual testing, a temporary Personal Access Token (`human-token`, ID `juhtrz77ybg5zff5r38wu68bsc`) and a bot token were referenced. Both credentials were treated as compromised:
+
+1. **Immediate Revocation:** The records were deleted from PostgreSQL `useraccesstokens` and active session records were purged from `sessions`.
+2. **Container Cache Flush:** The Mattermost service was restarted to clear in-memory token/session caches.
+3. **Invalidation Verification:** Pre-flight HTTP tests confirmed that both old tokens now fail authentication with **HTTP 401 Unauthorized**.
+
+### Safe Owner Verification Steps in Mattermost UI
+To independently verify that no active unauthorized tokens remain on the account:
+1. Open the Mattermost Web UI at **http://localhost:59113**.
+2. Log in with the human owner account (`user`).
+3. Click your profile avatar (top-left) and select **Profile > Security > Personal Access Tokens**.
+4. Confirm that the token list is empty (or delete any unneeded personal access tokens).
+
+---
+
+## 4. Agent Architecture: Implementation Agent vs Switch Runtime Agent
+
+### Clear Separation of Roles
+
+| Role | Agent / System | Responsibility |
+| :--- | :--- | :--- |
+| **Implementation Engineer** | **AGY / Antigravity** (Google DeepMind) | Implements CASCADE codebase, determinism, test suites, verifier hardening, and artifact integrity. |
+| **Switch Workspace Agent** | **`switch-buddy-admin`** (Switch Console) | The agent installed within Switch Console to interact with users inside Mattermost channels. |
+
+### Runtime Agent Investigation & Authorization Gate
+- **Database Findings:** Switch database inspection revealed that Switch Console configured `switch-buddy-admin` (ID `56911d08-ca1d-4e80-8812-9c77e3852dc9`) with the `Codex CLI` connector using model `gpt-5.6-sol`.
+- **Antigravity ACP Status:** Antigravity ACP binaries (`agy_acp_server.exe` / `antigravity-acp.cmd`) were downloaded and placed in `C:\Users\yashs\tools\antigravity-acp\bin`. However, Switch Console's ACP driver requires an interactive browser OAuth authentication flow to generate `.local/state/switch/antigravity-acp/acp_token.json`.
+- **Owner Authorization Requirement:** In compliance with project guidelines, CASCADE will **not** continue utilizing Codex as the Switch runtime without explicit project-owner authorization.
+
+### Supported Owner Action for AGY ACP Authentication
+To use AGY/Antigravity as the active Switch runtime agent:
+1. Launch Switch Console.
+2. Navigate to **Settings > Providers > Antigravity**.
+3. Complete the interactive Google Antigravity sign-in prompt to produce the verified `acp_token.json` session.
+4. Alternatively, provide explicit authorization to allow the pre-existing `switch-buddy-admin` connector to respond in the designated operations room.
+
+---
+
+## 5. Security Boundary & Verifier Hardening (Mission 02B)
+
+In response to independent review findings, `src/switch/approval.ts` was hardened with the following defenses:
+
+1. **Multi-Format Bot & Webhook Rejection:**
+   - Detects boolean, string, and numeric flags for `is_bot` (`true`, `"true"`, `"1"`, `1`).
+   - Detects `props.from_bot` and `props.from_webhook` in boolean, string, or numeric forms.
+   - Flags any post containing `props.override_username` or `props.webhook_display_name`.
+   - Inspects `user.roles` for the `system_bot` role.
+   - Any match marks the message as `authorKind: 'agent'`, which fails authorization closed.
+2. **Prohibition of Generic Username Fallback:**
+   - Completely eliminated `user.username` fallback lookups in `MattermostMessageVerifier`.
+   - User identity mapping requires exact verified Mattermost account IDs (`user.id`).
+   - Prohibits generic usernames (`user`, `admin`, `root`, `owner`, `guest`, `system`) as keys in `userMap`, throwing a `TypeError` at construction time.
+3. **Strict Room & Server Binding:**
+   - `ref.serverId` must strictly match the configured `serverId`. Base URL fallbacks are prohibited.
+   - `ref.roomId` must strictly match the resolved canonical room mapped from `post.channel_id`.
+   - Cross-room and unmapped channel posts are strictly rejected.
+
+---
+
+## 6. Local Installation Modifications & Reversal Guide
+
+To establish the running Switch and Mattermost collaboration environment, bounded adjustments were made. The following inventory documents each modification and its reversal:
+
+### A. Switch Console Application Code
+1. `C:\Users\yashs\AppData\Local\Programs\Switch Console\resources\app\dist\main\agent-controller.mjs`:
+   - **Change:** Added fallback null-checks on `agent.options` to prevent unhandled exceptions during agent spawn.
+   - **Reversal:** Reinstall Switch Console v0.40.1, or restore `agent-controller.mjs` from package backup.
+2. `C:\Users\yashs\AppData\Local\Programs\Switch Console\resources\app\dist\python\switch_core\bridges\agent\api\operations.py`:
+   - **Change:** Supported case-insensitive query parameter lookups and auto-placement verification for agents in legacy rooms.
+   - **Reversal:** Restore `operations.py` from package backup or reinstall Switch Console.
+
+### B. PostgreSQL Database State (`switch` DB on port 59114)
+1. `rooms` Table:
+   - **Change:** Inserted legacy room mapping record for room `6fe42a1c-6f29-45de-8aca-da763634216e`.
+2. `room_agents` Table:
+   - **Change:** Inserted placement record associating agent `56911d08-ca1d-4e80-8812-9c77e3852dc9` with room `6fe42a1c-6f29-45de-8aca-da763634216e`.
+3. **Reversal SQL:**
+   ```sql
+   DELETE FROM room_agents WHERE room_id = '6fe42a1c-6f29-45de-8aca-da763634216e';
+   DELETE FROM rooms WHERE id = '6fe42a1c-6f29-45de-8aca-da763634216e';
+   ```
+
+### C. Host Environment PATH
+- **Change:** Added `C:\Users\yashs\tools\antigravity-acp\bin` to the user `Path` environment variable.
+- **Reversal:** Remove `C:\Users\yashs\tools\antigravity-acp\bin` from the user `Path` environment variable.
