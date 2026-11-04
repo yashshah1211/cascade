@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 import {
   EVIDENCE, assertLocalMattermostURL, assertPostId,
   verifyMattermostEvidence, loadVerifiedArtifacts,
-  extractVerifiedAcpTranscript, sha256,
+  extractVerifiedAcpTranscript, inspectAcpShape, sha256,
 } from './lib.mjs';
 import { sceneHtml } from './render.mjs';
 
@@ -26,6 +26,7 @@ const ffmpegBin = ffmpeg;
 const ffprobeBin = ffprobePackage.path;
 const input = new Set(process.argv.slice(2));
 const checkOnly = input.has('--check-only');
+const inspectAcp = input.has('--inspect-acp');
 const skipVideo = input.has('--capture-only');
 const incidentOverride = process.env.CASCADE_DEMO_INCIDENT_POST_ID
   ? assertPostId(process.env.CASCADE_DEMO_INCIDENT_POST_ID)
@@ -55,14 +56,26 @@ function acpTranscriptPath() {
 }
 
 function loadLocalEvidence() {
+  // The receipt is a mandatory gate. The ACP trace is OPTIONAL because a
+  // historical transcript can use a format not supported by this parser.
+  // If unverified, omit the agent-proof scene instead of inventing evidence.
   const artifacts = loadVerifiedArtifacts(root);
+  let transcript = null;
+  let transcriptStatus = 'unavailable';
   const transcriptFile = acpTranscriptPath();
   if (!existsSync(transcriptFile)) {
-    throw new Error('Cannot find the real Antigravity ACP transcript at ' + transcriptFile +
-      '. Set CASCADE_DEMO_ACP_TRANSCRIPT to its actual location. No synthetic trace will be substituted.');
+    log('WARNING: ACP transcript file not found. Agent-tool evidence will be omitted.');
+  } else {
+    try {
+      transcript = extractVerifiedAcpTranscript(readFileSync(transcriptFile, 'utf8'));
+      transcriptStatus = 'verified';
+    } catch {
+      transcriptStatus = 'unsupported-format';
+      log('WARNING: ACP transcript could not be strictly verified; agent-tool evidence will be omitted.');
+      log('Optional: run record-demo.cmd --inspect-acp to see safe schema information.');
+    }
   }
-  const transcript = extractVerifiedAcpTranscript(readFileSync(transcriptFile, 'utf8'));
-  return { artifacts, transcript };
+  return { artifacts, transcript, transcriptStatus };
 }
 
 async function promptLogin(page) {
@@ -180,7 +193,7 @@ function narrationScenes(local, posts) {
     return existsSync(path) ? readFileSync(path).toString('base64') : null;
   };
   const verifiedArtifacts = local.artifacts;
-  const code = [
+  const code = local.transcript ? [
     'SOURCE: LOCAL ANTIGRAVITY ACP TRANSCRIPT',
     'Session: ' + local.transcript.sessionId,
     'Step 107: MODEL → call_mcp_tool',
@@ -190,7 +203,7 @@ function narrationScenes(local, posts) {
     '  state = APPLIED_LOCALLY',
     '  alreadyApplied = true',
     '  duplicate receipt = suppressed',
-  ].join('\n');
+  ].join('\n') : null;
   return [
     {
       id: 'intro', type: 'title', title: 'WHEN THE PLAN BREAKS',
@@ -295,7 +308,7 @@ function narrationScenes(local, posts) {
       label: 'CASCADE · GITHUB.COM/YASHSHAH1211/CASCADE',
       narration: 'CASCADE turns a crisis from a convincing AI suggestion into an accountable team decision. The agent coordinates. The engine checks the promises. The human approves exceptions. And Switch keeps everyone in the same workflow. CASCADE: when a plan breaks, the promises don’t have to.',
     },
-  ];
+  ].filter(scene => scene.id !== 'agent-proof' || local.transcript !== null);
 }
 
 function audioDuration(path) {
@@ -361,15 +374,29 @@ async function main() {
     throw new Error('One-click narration mode uses Windows PowerShell/System.Speech. Run this on your Windows laptop.');
   }
   if (input.has('--help')) {
-    console.log('Usage: record-demo.cmd [--check-only | --capture-only]');
+    console.log('Usage: record-demo.cmd [--check-only | --inspect-acp | --capture-only]');
+    return;
+  }
+  if (inspectAcp) {
+    const path = acpTranscriptPath();
+    if (!existsSync(path)) {
+      throw new Error('The local Antigravity ACP transcript file is missing. No raw transcript was read.');
+    }
+    console.log('[CASCADE Studio] SAFE ACP SHAPE — field names/types only, no values or messages:');
+    console.log(JSON.stringify(inspectAcpShape(readFileSync(path, 'utf8')), null, 2));
     return;
   }
   for (const dir of [output, raw, frames, clips, profile]) mkdirSync(dir, { recursive: true });
   log('READ-ONLY: no Mattermost posts, approvals, purchases, or notices will be created.');
-  log('Verifying the ORIGINAL local recovery and Antigravity transcript...');
+  log('Verifying ORIGINAL local recovery artifacts; ACP trace is optional.');
   const local = loadLocalEvidence();
   log('Local receipt: ' + local.artifacts.receipt.state + ' / ' + local.artifacts.receipt.executionKey);
-  if (checkOnly) { log('Local artifacts and ACP trace verified.'); return; }
+  if (checkOnly) {
+    log('PASS: Local recovery artifacts verified.');
+    log('ACP evidence: ' + local.transcriptStatus +
+      (local.transcript ? ' (eligible for inclusion)' : ' (will not be shown in video)'));
+    return;
+  }
 
   log('Opening dedicated Chromium browser to capture genuine Mattermost posts...');
   const posts = await captureEvidence();
@@ -383,6 +410,7 @@ async function main() {
     authenticatedPosts: posts,
     artifactChecksums: local.artifacts.checksums,
     antigravityEvidence: local.transcript,
+    antigravityStatus: local.transcriptStatus,
     scenes: scenes.map(s => ({ id: s.id, title: s.title, narration: s.narration })),
   };
   writeFileSync(join(output, 'evidence-manifest.json'), JSON.stringify(manifest, null, 2));
