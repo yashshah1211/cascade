@@ -6,17 +6,62 @@ function check(id: string, status: ConstraintCheck['status'], message: string, e
   return { id, status, message, evidence };
 }
 
-/** Maximum concurrent AV demand over all start/end events. End-before-start on equal timestamps. */
-function avPeak(allocations: Allocation[]): { time: string; count: number; halls: string[] } {
+/**
+ * Minimum required AV equipment per active hall.
+ * Active halls hosting keynote/opening sessions require staffed AV kits.
+ */
+export const MIN_AV_KITS_PER_ACTIVE_HALL = 1;
+
+interface AvPeakResult {
+  time: string;
+  count: number;
+  halls: string[];
+  zeroEquippedHalls: { hallId: string; at: string }[];
+}
+
+/**
+ * Maximum concurrent AV demand over all start/end checkpoints.
+ * End-before-start on equal timestamps (half-open [start, end)).
+ * Each active hall requires at least MIN_AV_KITS_PER_ACTIVE_HALL kit.
+ * Multiple allocations in the same hall share equipment (max requirement),
+ * avoiding double-counting while ensuring active halls cannot have zero kits.
+ */
+function avPeak(allocations: Allocation[]): AvPeakResult {
   const checkpoints = [...new Set(allocations.flatMap(a => [a.start, a.end]))]
-    .sort((a, b) => isoMillis(a)! - isoMillis(b)!);
-  let peak = { time: checkpoints[0] ?? '', count: 0, halls: [] as string[] };
+    .sort((a, b) => (isoMillis(a) ?? 0) - (isoMillis(b) ?? 0));
+  let peak: AvPeakResult = { time: checkpoints[0] ?? '', count: 0, halls: [], zeroEquippedHalls: [] };
+  const allZeroEquipped: { hallId: string; at: string }[] = [];
+
   for (const time of checkpoints) {
     const t = isoMillis(time)!;
     const active = allocations.filter(a => isoMillis(a.start)! <= t && t < isoMillis(a.end)!);
-    const count = active.reduce((n, a) => n + a.avKits, 0);
-    if (count > peak.count) peak = { time, count, halls: [...new Set(active.map(a => a.hallId))] };
+    if (!active.length) continue;
+
+    const activeHalls = [...new Set(active.map(a => a.hallId))];
+    let totalDemandAtT = 0;
+
+    for (const hallId of activeHalls) {
+      const hallAllocs = active.filter(a => a.hallId === hallId);
+      const allocatedByPlan = Math.max(0, ...hallAllocs.map(a => a.avKits));
+      if (allocatedByPlan < MIN_AV_KITS_PER_ACTIVE_HALL) {
+        allZeroEquipped.push({ hallId, at: time });
+      }
+      const hallDemand = Math.max(MIN_AV_KITS_PER_ACTIVE_HALL, allocatedByPlan);
+      totalDemandAtT += hallDemand;
+    }
+
+    if (totalDemandAtT > peak.count) {
+      peak = { time, count: totalDemandAtT, halls: activeHalls, zeroEquippedHalls: [] };
+    }
   }
+
+  const seenZero = new Set<string>();
+  peak.zeroEquippedHalls = allZeroEquipped.filter(item => {
+    const k = `${item.hallId}@${item.at}`;
+    if (seenZero.has(k)) return false;
+    seenZero.add(k);
+    return true;
+  });
   return peak;
 }
 
@@ -25,7 +70,8 @@ function capacityChecks(scenario: Scenario, plan: RecoveryPlan): ConstraintCheck
   const problems: { hallId: string; at: string; allocated: number; capacity: number }[] = [];
   for (const hall of scenario.halls) {
     const usage = plan.allocations.filter(a => a.hallId === hall.id);
-    const checkpoints = [...new Set(usage.map(a => a.start))].sort();
+    const checkpoints = [...new Set(usage.map(a => a.start))]
+      .sort((a, b) => (isoMillis(a) ?? 0) - (isoMillis(b) ?? 0));
     for (const at of checkpoints) {
       const t = isoMillis(at)!;
       const allocated = usage
@@ -51,7 +97,7 @@ export function evaluatePlan(scenario: Scenario, plan: RecoveryPlan, approvals: 
     invalidRevision ? 'Plan was made against a different scenario revision' : 'Scenario revision matches plan',
     { planRevision: plan.scenarioRevision, scenarioRevision: scenario.revision }));
 
-  const attendeeHits = new Uint16Array(scenario.attendees);
+  const attendeeHits = new Uint32Array(scenario.attendees);
   const outOfRange: string[] = [];
   for (const [index, a] of plan.allocations.entries()) {
     if (a.attendeeFrom >= scenario.attendees || a.attendeeTo >= scenario.attendees) {
@@ -86,22 +132,47 @@ export function evaluatePlan(scenario: Scenario, plan: RecoveryPlan, approvals: 
 
   const av = avPeak(plan.allocations);
   const avSupply = scenario.avKitsAvailable + plan.rentedAvKits;
-  checks.push(check('AV_CONCURRENCY', av.count > avSupply ? 'FAIL' : 'PASS',
-    av.count > avSupply ? `Peak demand requires ${av.count} AV kits, only ${avSupply} supplied` : 'AV supply covers peak simultaneous demand',
-    { peakDemand: av.count, availableSupply: avSupply, peakAt: av.time, simultaneousHalls: av.halls }));
+  const hasZeroEquippedHalls = av.zeroEquippedHalls.length > 0;
+  const avConcurrencyDeficit = av.count > avSupply;
+  const avPassed = !hasZeroEquippedHalls && !avConcurrencyDeficit;
+
+  const avMessage = hasZeroEquippedHalls
+    ? `Active hall ${av.zeroEquippedHalls[0]!.hallId} has 0 AV equipment; minimum ${MIN_AV_KITS_PER_ACTIVE_HALL} kit required`
+    : avConcurrencyDeficit
+      ? `Peak demand requires ${av.count} AV kits, only ${avSupply} supplied`
+      : 'AV supply covers peak simultaneous demand';
+
+  checks.push(check('AV_CONCURRENCY', avPassed ? 'PASS' : 'FAIL', avMessage, {
+    peakDemand: av.count,
+    availableSupply: avSupply,
+    peakAt: av.time,
+    simultaneousHalls: av.halls,
+    minKitsPerHall: MIN_AV_KITS_PER_ACTIVE_HALL,
+    zeroEquippedHalls: av.zeroEquippedHalls,
+  }));
 
   const sponsor = isoMillis(plan.sponsorShowcaseAt)!;
-  checks.push(check('SPONSOR_DEADLINE', sponsor >= isoMillis(scenario.sponsorShowcaseBefore)! ? 'FAIL' : 'PASS',
-    sponsor >= isoMillis(scenario.sponsorShowcaseBefore)! ? 'Sponsor showcase occurs after the committed cutoff' : 'Sponsor showcase is scheduled before cutoff',
-    { showcaseAt: plan.sponsorShowcaseAt, deadline: scenario.sponsorShowcaseBefore }));
+  const deadline = isoMillis(scenario.sponsorShowcaseBefore)!;
+  const precedesKickoff = sponsor < kickoff;
+  const exceedsDeadline = sponsor >= deadline;
+  const sponsorOk = !precedesKickoff && !exceedsDeadline;
+  checks.push(check('SPONSOR_DEADLINE', sponsorOk ? 'PASS' : 'FAIL',
+    precedesKickoff
+      ? 'Sponsor showcase is scheduled before event kickoff'
+      : exceedsDeadline
+        ? 'Sponsor showcase occurs after the committed cutoff'
+        : 'Sponsor showcase is scheduled before cutoff',
+    { showcaseAt: plan.sponsorShowcaseAt, kickoffAt: scenario.kickoffAt, deadline: scenario.sponsorShowcaseBefore }));
 
   const projectedCostINR = scenario.baselineCommittedCostINR + plan.rentedAvKits * scenario.avKitRentalCostINR;
   const excessBudgetINR = Math.max(0, projectedCostINR - scenario.baselineBudgetINR);
+  const kickoffTime = isoMillis(scenario.kickoffAt)!;
   const validApproval = approvals.find(a => isVerifiedApproval(a) &&
     a.exceptionType === 'BUDGET_CAP' && a.planHash === hash && a.scenarioId === scenario.id &&
     a.scenarioRevision === scenario.revision && a.switchServerId === scenario.approvalAuthority.serverId &&
     a.switchRoomId === scenario.approvalAuthority.roomId && a.verifiedHumanId === scenario.approvalAuthority.approverId &&
-    a.maxExtraINR >= excessBudgetINR);
+    Number.isSafeInteger(a.maxExtraINR) && a.maxExtraINR >= excessBudgetINR &&
+    isoMillis(a.verifiedAt) !== null && isoMillis(a.verifiedAt)! <= kickoffTime);
   const status = excessBudgetINR === 0 || validApproval ? 'PASS' : 'REQUIRES_APPROVAL';
   checks.push(check('BUDGET_CAP', status, status === 'PASS' ? 'Budget authorization satisfied' : `INR ${excessBudgetINR} exception requires verified human approval in Switch`,
     { projectedCostINR, baselineCapINR: scenario.baselineBudgetINR, excessBudgetINR, approvalMessageId: validApproval?.approvalMessageId ?? null }));
