@@ -179,8 +179,24 @@ async function captureEvidence() {
       log('Verifying authenticated ' + kind + ' evidence: ' + id);
       const verified = await retrieveAndValidate(context, id, kind);
       const file = join(raw, kind + '.png');
-      const hash = await screenshotPost(page, id, kind, file);
-      evidence.push({ ...verified.meta, screenshot: kind + '.png', sha256: hash });
+      try {
+        const hash = await screenshotPost(page, id, kind, file);
+        evidence.push({
+          ...verified.meta, screenshot: kind + '.png', sha256: hash,
+          visualSource: 'authenticated-post-screenshot',
+        });
+      } catch {
+        // The post is verified by the authenticated API, but the installed
+        // Mattermost UI may not expose the post DOM in the expected format.
+        // Render a labeled API-derived evidence card instead of using a
+        // different post, an old screenshot, or an invented Mattermost UI.
+        log('WARNING: UI capture unavailable for verified ' + kind +
+          ' post. A clearly labeled authenticated-API summary will be used.');
+        evidence.push({
+          ...verified.meta, screenshot: null, sha256: null,
+          visualSource: 'authenticated-api-summary-not-ui-screenshot',
+        });
+      }
     }
     return evidence;
   } finally { await context.close(); }
@@ -189,8 +205,40 @@ async function captureEvidence() {
 function narrationScenes(local, posts) {
   const hasIncident = posts.some(p => p.kind === 'incident');
   const file = (kind) => {
+    const record = posts.find(item => item.kind === kind);
     const path = join(raw, kind + '.png');
-    return existsSync(path) ? readFileSync(path).toString('base64') : null;
+    return record?.screenshot && existsSync(path)
+      ? readFileSync(path).toString('base64') : null;
+  };
+  // The following fields are drawn only from already-verified Mattermost
+  // metadata and local recovery artifacts; they are not fabricated UI captures.
+  const sourceCard = (kind) => {
+    const record = posts.find(item => item.kind === kind);
+    if (!record) return null;
+    const header = [
+      'AUTHENTICATED MATTERMOST API EVIDENCE',
+      'Verified post ID: ' + record.id,
+      'Room verified: Town Square (event-430)',
+      'Created: ' + record.createdAt,
+      '',
+    ];
+    const details = kind === 'approval' ? [
+      'Owner-authored exact budget exception',
+      'Plan Hash: ' + EVIDENCE.planHash,
+      'Maximum additional INR: 3,000',
+    ] : kind === 'receipt' ? [
+      'Published receipt status: APPLIED_LOCALLY',
+      'Plan Hash: ' + EVIDENCE.planHash,
+      'No external booking or payment',
+    ] : kind === 'evaluation' ? [
+      'Deterministic report contains AV_CONCURRENCY',
+      'Plan B: REQUIRES_APPROVAL',
+      'Plan Hash: ' + EVIDENCE.planHash,
+    ] : [
+      'Original incident report: event-430',
+      'Source: authenticated human-authored post',
+    ];
+    return header.concat(details, '', 'API SUMMARY · NOT A SCREENSHOT').join('\n');
   };
   const verifiedArtifacts = local.artifacts;
   const code = local.transcript ? [
@@ -217,7 +265,7 @@ function narrationScenes(local, posts) {
       subtitle: hasIncident ? 'An actual human reports the disruption inside Switch.' :
         'Synthetic incident brief · the real agent conversation follows.',
       imageData: hasIncident ? file('incident') : null,
-      code: hasIncident ? null : [
+      code: hasIncident ? (file('incident') ? null : sourceCard('incident')) : [
         'SYNTHETIC EVENT: event-430',
         'Disruption: auditorium cancelled',
         'Attendees: 430',
@@ -236,6 +284,8 @@ function narrationScenes(local, posts) {
       id: 'evaluation', type: 'evidence', title: 'THE AGENT CALLS THE ENGINE',
       subtitle: 'Real Mattermost report · computed constraint results, not guesses.',
       imageData: file('evaluation'),
+      code: file('evaluation') ? null : sourceCard('evaluation'),
+      codeLabel: 'SOURCE: VERIFIED API SUMMARY · NO UI IMAGE',
       bullets: ['Plan A fails concurrent AV.', 'Plan C breaks synchronized kickoff.', 'Plan B needs exact budget approval.'],
       sourceNote: 'Verified post: ' + EVIDENCE.evaluationPost,
       narration: 'Antigravity invokes a Switch tool connected to our deterministic TypeScript engine. Plan A fails because two simultaneous halls need two AV kits. Plan C breaks the promised shared kickoff. Plan B meets the hard constraints, but requires three thousand rupees more.',
@@ -261,6 +311,8 @@ function narrationScenes(local, posts) {
       id: 'approval', type: 'evidence', title: 'THE HUMAN MAKES THE EXCEPTION',
       subtitle: 'Authenticated Mattermost approval · exact plan hash and spending cap.',
       imageData: file('approval'),
+      code: file('approval') ? null : sourceCard('approval'),
+      codeLabel: 'SOURCE: VERIFIED API SUMMARY · NO UI IMAGE',
       bullets: ['Human author verified.', 'Room and server checked.', 'Plan hash and INR 3,000 match.'],
       sourceNote: 'Verified owner post: ' + EVIDENCE.approvalPost,
       narration: 'The AI is not permitted to authorize its own budget exception. The human owner personally submits a hash-bound approval in Mattermost. CASCADE fetches the actual message, verifies its author, room, timestamp, exact plan and maximum extra spend before allowing execution.',
@@ -269,6 +321,8 @@ function narrationScenes(local, posts) {
       id: 'receipt', type: 'evidence', title: 'AUTHORIZATION IS NOT EXECUTION',
       subtitle: 'The local receipt was actually posted back to the team room.',
       imageData: file('receipt'),
+      code: file('receipt') ? null : sourceCard('receipt'),
+      codeLabel: 'SOURCE: VERIFIED API SUMMARY · NO UI IMAGE',
       bullets: ['State: APPLIED_LOCALLY.', 'Approval is traceable.', 'No purchases or notifications.'],
       sourceNote: 'Verified receipt post: ' + EVIDENCE.receiptPost,
       narration: 'After verifying the approval, CASCADE generated the recovery artifacts and published a real receipt in the Switch conversation. Its state is applied locally. It does not claim that a physical venue was booked or that a supplier received payment.',
