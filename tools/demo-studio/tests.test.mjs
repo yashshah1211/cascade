@@ -307,3 +307,60 @@ test('Demo: ACP safe inspection never returns raw transcript on malformed lines'
   assert.deepEqual(report.step108, { present: false });
   assert.ok(!JSON.stringify(report).includes('SECRET'));
 });
+
+
+test('Demo V2: authenticated bot status requires exact human approval and plan hash', () => {
+  const status = {
+    id: 'abcdefghijklmnopqrstuvwxyz', channel_id: EVIDENCE.channelId,
+    user_id: 'bot-account', create_at: 1793812404513,
+    message: 'CASCADE Recovery Status — Event 430 Verified\nState: APPLIED_LOCALLY\n' +
+      EVIDENCE.planHash + '\nVerified post ' + EVIDENCE.approvalPost,
+    props: {},
+  };
+  assert.equal(verifyMattermostEvidence(status, bot, 'status').kind, 'status');
+  assert.throws(() => verifyMattermostEvidence(status, human, 'status'));
+  assert.throws(() => verifyMattermostEvidence({
+    ...status, message: status.message.replace(EVIDENCE.approvalPost, 'another-post')
+  }, bot, 'status'));
+});
+
+test('Demo V2: presentation renderer makes verified API cards readable and accurately labeled', () => {
+  const scene = {
+    type: 'evidence',
+    title: 'HUMAN AUTHORIZATION',
+    subtitle: 'Authenticated source',
+    proof: {
+      source: 'VERIFIED MATTERMOST API',
+      headline: 'HUMAN APPROVED INR 3000',
+      explanation: 'Not a screenshot.',
+      fields: [
+        {label: 'Human', value: 'verified'},
+        {label: 'Post ID', value: EVIDENCE.approvalPost},
+      ],
+      disclaimer: 'From authenticated metadata, not fabricated UI',
+    },
+    bullets: ['Plan hash bound'],
+  };
+  const html = sceneHtml(scene, 1, 9);
+  assert.match(html, /proof-panel/);
+  assert.match(html, /VERIFIED MATTERMOST API/);
+  assert.match(html, /Not a screenshot/);
+  assert.match(html, /HUMAN APPROVED INR 3000/);
+  assert.match(html, /width:22%/);
+});
+
+test('Demo V2: Switch workflow diagram has explicit human, room, agent and engine roles', () => {
+  const html = sceneHtml({
+    title: 'WHY SWITCH MATTERS', subtitle: 'Human AI collaboration',
+    flowSteps: [
+      {name: 'HUMAN',detail: 'Authorizes exception'},
+      {name: 'SWITCH',detail: 'Shared room'},
+      {name: 'ANTIGRAVITY',detail: 'Agent tools'},
+      {name: 'CASCADE',detail: 'Constraint engine'},
+    ],
+  }, 0, 5);
+  for (const value of ['flow-panel','HUMAN','SWITCH','ANTIGRAVITY','CASCADE']) {
+    assert.match(html, new RegExp(value));
+  }
+  assert.ok(!html.includes('fake screenshot'));
+});
