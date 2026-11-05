@@ -5,7 +5,37 @@ const escape = safeHtml;
 export function sceneHtml(scene, sceneIndex, total) {
   const bullets = (scene.bullets ?? []).slice(0, 4).map(b => '<li>' + escape(b) + '</li>').join('');
   let visual = '';
-  if (scene.imageData) {
+  if (scene.proof) {
+    // These are presentation cards derived from previously authenticated
+    // Mattermost API records, not reconstructed or fabricated chat screenshots.
+    const p = scene.proof;
+    const fields = (p.fields ?? []).slice(0, 4).map(field =>
+      '<div class="proof-row"><div class="proof-key">' + escape(field.label) +
+      '</div><div class="proof-value">' + escape(field.value) + '</div></div>'
+    ).join('');
+    const captured = scene.imageData
+      ? '<div class="proof-capture"><div class="proof-capture-label">REAL POST SCREENSHOT</div>' +
+        '<img alt="Screen capture of the verified Mattermost post" src="data:image/png;base64,' +
+        scene.imageData + '"/></div>'
+      : '';
+    visual = '<div class="proof-panel"><div class="proof-label">' +
+      escape(p.source ?? 'AUTHENTICATED MATTERMOST API · PRESENTATION RENDER') +
+      '</div><div class="proof-status">' + escape(p.headline) +
+      '</div><div class="proof-explain">' + escape(p.explanation ?? '') +
+      '</div><div class="proof-rows">' + fields + '</div><div class="proof-bottom">' +
+      escape(p.disclaimer ?? 'Values taken from verified source metadata. Not a chat screenshot.') +
+      '</div>' + captured + '</div>';
+  } else if (scene.flowSteps) {
+    const nodes = scene.flowSteps.map((v,i) =>
+      '<div class="flow-node"><div class="flow-number">0' + (i+1) +
+      '</div><div class="flow-name">' + escape(v.name) +
+      '</div><div class="flow-desc">' + escape(v.detail) +
+      '</div></div>'
+    ).join('<div class="flow-arrow">→</div>');
+    visual = '<div class="flow-panel"><div class="flow-label">A REAL HUMAN–AGENT WORKFLOW</div><div class="flow-nodes">' +
+      nodes + '</div><div class="flow-bottom">' +
+      escape(scene.flowSummary ?? '') + '</div></div>';
+  } else if (scene.imageData) {
     visual = '<div class="screen"><img alt="Verified Mattermost screen capture" src="data:image/png;base64,' +
       scene.imageData + '"/></div>';
   } else if (scene.code) {
@@ -45,7 +75,7 @@ export function sceneHtml(scene, sceneIndex, total) {
     '.codehead{height:60px;border-bottom:1px solid #263443;background:#162330;padding:20px 26px}',
     '.dot{height:11px;width:11px;border-radius:50%;display:inline-block;margin-right:12px}.red{background:#fa6c6e}.yellow{background:#f4c661}.green{background:#7acfad}',
     '.code-label{margin-left:20px;font-size:14px;color:#a3b6c3;letter-spacing:2px}',
-    'pre{margin:26px 35px;color:#d6f5f3;font:23px/1.7 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}',
+    'pre{margin:28px 36px;color:#d6f5f3;font:27px/1.55 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}',
     '.hero{width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;background:linear-gradient(120deg,#133245,#0f1a29);border:1px solid #345366;border-radius:22px}',
     '.hero-word{font-size:116px;letter-spacing:18px;font-weight:850;color:#f1f4ed;text-shadow:0 10px 40px #0005}',
     '.hero-sub{font-size:18px;letter-spacing:7px;color:#6ec8d0;margin-top:0}',
@@ -54,6 +84,27 @@ export function sceneHtml(scene, sceneIndex, total) {
     '.hero-shape{height:80px;display:flex;gap:16px;align-items:flex-end}',
     '.hero-shape span{width:20px;background:#6ed1db;border-radius:5px}',
     '.hero-shape span:nth-child(1){height:32px}.hero-shape span:nth-child(2){height:59px}.hero-shape span:nth-child(3){height:79px}',
+    '.proof-panel{height:100%;width:100%;position:relative;background:linear-gradient(150deg,#0c2636,#102f40);border:1px solid #3c7681;border-radius:20px;padding:35px;overflow:hidden;box-shadow:0 28px 60px #0007}',
+    '.proof-label{font-size:17px;letter-spacing:2px;font-weight:800;color:#78d7dd}',
+    '.proof-status{font-size:59px;font-weight:800;letter-spacing:-1px;margin-top:25px;color:#f7f5e9}',
+    '.proof-explain{font-size:24px;line-height:1.4;color:#c6d8e1;margin-top:12px;max-width:930px}',
+    '.proof-rows{margin-top:35px;max-width:1180px;display:grid;grid-template-columns:1fr 1fr;gap:22px 29px}',
+    '.proof-row{border:1px solid #3b6070;background:#0f2534;border-radius:14px;padding:18px 21px;min-height:100px}',
+    '.proof-key{font-size:16px;letter-spacing:1.5px;color:#7ebdc8;font-weight:750;text-transform:uppercase}',
+    '.proof-value{margin-top:10px;font-size:27px;color:#f3f5f1;font-weight:720;overflow-wrap:anywhere}',
+    '.proof-bottom{position:absolute;bottom:22px;left:36px;right:36px;font-size:15px;color:#b1c6cf}',
+    '.proof-capture{position:absolute;right:24px;bottom:64px;width:340px;height:150px;background:#fff;border:2px solid #7ed5dc;border-radius:10px;overflow:hidden}',
+    '.proof-capture-label{position:absolute;top:0;left:0;background:#0d2d3b;color:#e5ffff;padding:5px 10px;font-size:11px;letter-spacing:1px;z-index:2}',
+    '.proof-capture img{width:100%;height:100%;object-fit:cover;object-position:center top}',
+    '.flow-panel{height:100%;width:100%;background:linear-gradient(130deg,#112e41,#091b2b);border:1px solid #38596c;border-radius:20px;padding:40px;display:flex;flex-direction:column;justify-content:center}',
+    '.flow-label{color:#75d7e1;letter-spacing:2px;font-size:19px;font-weight:850;margin-bottom:38px}',
+    '.flow-nodes{display:flex;justify-content:space-between;align-items:stretch;gap:8px}',
+    '.flow-node{flex:1;background:#112f41;border:1px solid #4a7a84;border-radius:17px;padding:22px 15px;min-height:220px}',
+    '.flow-number{color:#63d5dd;font-size:17px;font-weight:800}',
+    '.flow-name{font-size:28px;font-weight:850;line-height:1.2;margin-top:17px}',
+    '.flow-desc{font-size:18px;color:#aecbd5;line-height:1.45;margin-top:10px}',
+    '.flow-arrow{align-self:center;font-size:41px;font-weight:800;color:#76d9dc}',
+    '.flow-bottom{margin-top:36px;font-size:21px;color:#b9d7dd;line-height:1.4}',
     '.noimage .visual{right:96px}.noimage .rail{display:none}',
     '</style>',
   ].join('');
