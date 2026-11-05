@@ -126,6 +126,12 @@ The official DevTools Academy rubric lists these criteria. This is a **presentat
 - [ ] Submitted entry is opened once from the public/judge perspective to verify links and assets.
 - [ ] Save a confirmation screenshot or receipt after manual submission.
 
+## Published Best Blog article (side track)
+
+**Published DEV Community post:** https://dev.to/yashshah1211/when-our-ai-agent-said-committed-before-it-had-executed-anything-21b2
+
+Published after the main CASCADE project entry. **Best Blog registration is not confirmed yet.** Check whether your existing submission can be edited to add this article. If the submission form does not offer an edit/blog field, ask organizers via the official event Discord how to attach this URL to the already submitted project. Do not create a duplicate project entry unless they direct you to.
+
 ## Final narrative to remember
 
 **“CASCADE doesn't ask the AI to promise everything will be fine. It asks the engine which commitments survive, asks the human which exception is acceptable, and records exactly what happened—in one Switch room.”**
