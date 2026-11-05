@@ -2,6 +2,8 @@
 
 ### When a plan breaks, the promises don't have to.
 
+**[▶ Watch the final CASCADE demo (3:16)](https://youtu.be/Q33BVLvCgTA)** — A narrated walkthrough of the human approval, deterministic recovery and genuine Mattermost evidence. The event is synthetic; execution is local only.
+
 **Flip the Switch Hackathon 2026 · Best Business Workflow · Built November 4–7, 2026**
 
 A 430-person hackathon loses its auditorium. Seven commitments — capacity, AV coverage, kickoff, sponsor timing, accessibility, budget, and keynote delivery — may break with it.
