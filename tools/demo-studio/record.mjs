@@ -162,6 +162,28 @@ async function screenshotPost(page, id, kind, screenshotPath) {
   return sha256(bytes);
 }
 
+async function findVerifiedIncident(context) {
+  // The original user incident may be a top-level message, not the parent of
+  // the later engine-verified response. Search only the known local channel,
+  // using read-only GET requests, and authenticate the candidate's author.
+  for (let page = 0; page < 6; page++) {
+    const listing = await getJson(context,
+      '/api/v4/channels/' + EVIDENCE.channelId + '/posts?per_page=100&page=' + page);
+    if (!listing?.posts || !Array.isArray(listing.order) || !listing.order.length) break;
+    for (const id of listing.order) {
+      const post = listing.posts[id];
+      if (!post || !post.message?.includes('CASCADE INCIDENT REPORT') ||
+          !post.message.includes('event-430') ||
+          !post.message.toLowerCase().includes('auditorium')) continue;
+      const author = await getJson(context, '/api/v4/users/' + post.user_id);
+      if (!author) continue;
+      try { return { post, meta: verifyMattermostEvidence(post, author, 'incident') }; }
+      catch { /* Preserve authenticity: never substitute a bot or another human. */ }
+    }
+  }
+  return null;
+}
+
 async function findVerifiedBotStatus(context) {
   // This is an optional historical Mattermost bot message, not an assertion
   // that an ACP tool call was independently reproduced during recording.
@@ -202,19 +224,21 @@ async function captureEvidence() {
       { id: EVIDENCE.receiptPost, kind: 'receipt' },
     ];
     const evalRecord = await retrieveAndValidate(context, EVIDENCE.evaluationPost, 'evaluation');
-    let incidentId = incidentOverride || evalRecord.post.root_id;
-    if (incidentId && /^[a-z0-9]{26}$/.test(incidentId) &&
-        incidentId !== EVIDENCE.evaluationPost) {
-      try {
-        await retrieveAndValidate(context, incidentId, 'incident');
-        entries.unshift({ id: incidentId, kind: 'incident' });
-        log('Found genuine human incident post ' + incidentId + '.');
-      } catch (e) {
-        if (incidentOverride) throw e;
-        log('Incident post cannot be proved from thread root. Will use the synthetic scenario card instead.');
-      }
+    let incident = null;
+    if (incidentOverride) {
+      incident = await retrieveAndValidate(context, incidentOverride, 'incident');
+    } else if (evalRecord.post.root_id &&
+               /^[a-z0-9]{26}$/.test(evalRecord.post.root_id) &&
+               evalRecord.post.root_id !== EVIDENCE.evaluationPost) {
+      incident = await retrieveAndValidate(context, evalRecord.post.root_id, 'incident')
+        .catch(() => null);
+    }
+    incident ??= await findVerifiedIncident(context);
+    if (incident) {
+      entries.unshift({ id: incident.post.id, kind: 'incident' });
+      log('Found genuine human incident post ' + incident.post.id + '.');
     } else {
-      log('Incident post ID not discoverable; using a clearly labeled synthetic context card.');
+      log('Original incident post not independently found; using clearly labeled fixture context.');
     }
     const botStatus = await findVerifiedBotStatus(context);
     if (botStatus) {
@@ -394,6 +418,14 @@ function narrationScenes(local, posts) {
       narration: 'Switch turns Antigravity into a teammate inside Mattermost. The agent calls deterministic CASCADE tools, while the human owns the spending decision. The offline engine can run alone, but this shared approval workflow cannot.',
     },
     {
+      id: 'real-report-screen', type: 'evidence', title: 'THE ACTUAL SWITCH CONVERSATION',
+      subtitle: 'An archived Mattermost message from the real Antigravity-connected agent.',
+      imageData: file('evaluation'),
+      bullets: ['Captured from the authenticated post.', 'An actual team-room response.', 'No simulated chat interface.'],
+      sourceNote: 'Existing Mattermost post ' + EVIDENCE.evaluationPost,
+      narration: 'This is an actual message in the Switch-connected Mattermost room, not a simulated chat screen. We independently check its post ID and author.',
+    },
+    {
       id: 'evaluation', type: 'evidence', title: 'THE AGENT CALLS THE ENGINE',
       subtitle: 'Real Mattermost report · computed constraint results, not guesses.',
       imageData: file('evaluation'),
@@ -480,7 +512,7 @@ function narrationScenes(local, posts) {
       label: 'CASCADE · GITHUB.COM/YASHSHAH1211/CASCADE',
       narration: 'CASCADE turns a crisis from a convincing AI suggestion into an accountable team decision. The agent coordinates. The engine checks the promises. The human approves exceptions. And Switch keeps everyone in the same workflow. CASCADE: when a plan breaks, the promises don’t have to.',
     },
-  ].filter(scene => (scene.id !== 'agent-proof' || local.transcript !== null) && (scene.id !== 'status' || proof('status') !== null));
+  ].filter(scene => (scene.id !== 'agent-proof' || local.transcript !== null) && (scene.id !== 'status' || proof('status') !== null) && (scene.id !== 'real-report-screen' || scene.imageData !== null));
 }
 
 function audioDuration(path) {
