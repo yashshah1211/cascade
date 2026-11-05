@@ -6,7 +6,7 @@
 **Official challenge:** https://www.wemakedevs.org/hackathons/switch  
 **Deadline:** November 7, 2026, 11:59 PM IST  
 **Project repository:** https://github.com/yashshah1211/cascade  
-**Video URL:** ADD AFTER RECORDING — do not submit with this placeholder.
+**Final demo video:** https://youtu.be/Q33BVLvCgTA (3:16, narrated evidence walkthrough; access must be checked in a private browser before submission).
 
 ---
 
@@ -90,7 +90,9 @@ https://github.com/yashshah1211/cascade
 
 ### Demo video
 
-**ADD THE ACTUAL VIEWABLE VIDEO URL BEFORE SUBMISSION.**
+https://youtu.be/Q33BVLvCgTA
+
+*Video combines original Mattermost screenshots with clearly labeled authenticated-API presentation cards and verified local artifacts. The original ACP tool-call trace is documented but is not independently shown in the final video.*
 
 ---
 
@@ -109,15 +111,17 @@ The official DevTools Academy rubric lists these criteria. This is a **presentat
 
 - [ ] Registration and eligibility are completed under the entrant's **own real identity**.
 - [ ] Public GitHub repository contains the finalized, merged code and up-to-date README.
-- [ ] Feature PR #2 has been reviewed and merged **only after owner approval**.
+- [x] Feature PR #2 merged into `main` following owner approval.
 - [ ] Final GitHub Actions build is passing on the submitted commit.
 - [ ] Screen recording shows genuine Switch/Mattermost interactions; no synthetic chat presented as real.
 - [ ] Video shows the verified Plan B approval and the local APPLIED_LOCALLY receipt.
 - [ ] Video clearly distinguishes **first execution** from **idempotent replay**.
-- [ ] Video includes a brief actual Switch MCP tool invocation or its authenticated transcript evidence.
+- [x] Video accurately distinguishes authenticated Mattermost evidence and API-rendered cards from raw MCP transcript proof; the unverified transcript is omitted from the final cut.
 - [ ] No screenshots, logs, documentation or captions reveal credentials, personal email, tokens, OAuth artifacts or unrelated private chats.
 - [ ] Demo video is uploaded and accessible to judges without special account access.
-- [ ] Video URL is inserted into the submission form and optionally the README.
+- [x] Video URL added to the public README and submission draft.
+- [ ] Verify YouTube playback from an incognito/private browser, without a signed-in YouTube account.
+- [ ] Paste the video URL into the **actual hackathon submission form**.
 - [ ] Official submission form is completed and **submitted manually** by the entrant before November 7 at 11:59 PM IST.
 - [ ] Submitted entry is opened once from the public/judge perspective to verify links and assets.
 - [ ] Save a confirmation screenshot or receipt after manual submission.
