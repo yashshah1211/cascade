@@ -1,0 +1,366 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  EVIDENCE, APPROVAL_COMMAND, assertLocalMattermostURL, assertPostId,
+  verifyMattermostEvidence, loadVerifiedArtifacts,
+  extractVerifiedAcpTranscript, inspectAcpShape, safeHtml, assertWithin,
+} from './lib.mjs';
+import { sceneHtml } from './render.mjs';
+
+function post(kind) {
+  const id = EVIDENCE[kind + 'Post'];
+  const message = kind === 'approval'
+    ? APPROVAL_COMMAND
+    : kind === 'evaluation'
+      ? 'Disruption Evaluation Report AV_CONCURRENCY REQUIRES_APPROVAL ' + EVIDENCE.planHash
+      : 'CASCADE RECOVERY PLAN EXECUTED LOCALLY APPLIED_LOCALLY ' + EVIDENCE.planHash;
+  return {
+    id, channel_id: EVIDENCE.channelId, user_id: kind === 'approval' ? EVIDENCE.humanId : 'bot-account',
+    message, create_at: 1793812404513, props: {},
+  };
+}
+const human = { id: EVIDENCE.humanId, is_bot: false, roles: 'system_user' };
+const bot = { id: 'bot-account', is_bot: true, roles: 'system_user system_bot' };
+
+test('Demo: accepts only localhost Mattermost origins', () => {
+  assert.equal(assertLocalMattermostURL('http://localhost:59113/'), 'http://localhost:59113');
+  assert.equal(assertLocalMattermostURL('http://127.0.0.1:59113/'), 'http://127.0.0.1:59113');
+  assert.throws(() => assertLocalMattermostURL('https://public.example/'));
+  assert.throws(() => assertLocalMattermostURL('http://localhost.example:59113/'));
+  assert.throws(() => assertLocalMattermostURL('http://example.com/'));
+  assert.throws(() => assertLocalMattermostURL('http://localhost:59113/path'));
+});
+
+test('Demo: validates Mattermost post IDs before use', () => {
+  assert.equal(assertPostId(EVIDENCE.approvalPost), EVIDENCE.approvalPost);
+  assert.throws(() => assertPostId('../api/v4/posts'));
+  assert.throws(() => assertPostId('POST'));
+});
+
+test('Demo: validates authenticated engine evaluation', () => {
+  assert.equal(verifyMattermostEvidence(post('evaluation'), bot, 'evaluation').kind, 'evaluation');
+  assert.throws(() => verifyMattermostEvidence(post('evaluation'), human, 'evaluation'));
+  assert.throws(() => verifyMattermostEvidence({
+    ...post('evaluation'), message: 'Plan B definitely works!'
+  }, bot, 'evaluation'));
+});
+
+test('Demo: refuses forged, altered or bot-authored human approvals', () => {
+  assert.equal(verifyMattermostEvidence(post('approval'), human, 'approval').kind, 'approval');
+  assert.throws(() => verifyMattermostEvidence(post('approval'), { ...human, is_bot: true }, 'approval'));
+  assert.throws(() => verifyMattermostEvidence(post('approval'), { ...human, id: 'another-user' }, 'approval'));
+  assert.throws(() => verifyMattermostEvidence({
+    ...post('approval'), message: APPROVAL_COMMAND.replace('3000', '6000')
+  }, human, 'approval'));
+  assert.throws(() => verifyMattermostEvidence({ ...post('approval'), channel_id: 'wrong-room' }, human, 'approval'));
+});
+
+test('Demo: validates published APPLIED_LOCALLY receipt post', () => {
+  assert.equal(verifyMattermostEvidence(post('receipt'), bot, 'receipt').kind, 'receipt');
+  assert.throws(() => verifyMattermostEvidence({
+    ...post('receipt'), message: 'execution succeeded, no receipt'
+  }, bot, 'receipt'));
+});
+
+test('Demo: only whitelisted ACP tool evidence is extracted', () => {
+  const steps = [
+    {
+      step_index: 107, source: 'MODEL', type: 'PLANNER_RESPONSE',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: '"cascade_execute_recovery"', Arguments: '{"approval_message_id":"' + EVIDENCE.approvalPost + '"}' },
+      }],
+      secret: 'do not print this',
+    },
+    {
+      step_index: 108, source: 'TOOL', type: 'MCP_TOOL',
+      content: {
+        exit_code: 0, success: true,
+        stdout: 'Plan Hash: ' + EVIDENCE.planHash + '\nState: APPLIED_LOCALLY\nAlready Applied: true\n',
+        credential: 'never put this in the video',
+      },
+    },
+  ];
+  const result = extractVerifiedAcpTranscript(steps.map(s => JSON.stringify(s)).join('\n'));
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.alreadyApplied, true);
+  assert.equal(result.tool, 'cascade_execute_recovery');
+  assert.ok(!JSON.stringify(result).includes('secret'));
+  assert.ok(!JSON.stringify(result).includes('credential'));
+});
+
+test('Demo: rejects ACP claim if tool failed or was not model-initiated', () => {
+  const one = { step_index:107, tool_calls:[] };
+  const two = { step_index:108, content: { exit_code: 1, success:false, stdout:'' } };
+  assert.throws(() => extractVerifiedAcpTranscript(JSON.stringify(one) + '\n' + JSON.stringify(two)));
+});
+
+function fixtureRoot() {
+  const root = mkdtempSync(join(tmpdir(), 'cascade-demo-test-'));
+  const path = join(root,'artifacts','event-430-recovery-live',EVIDENCE.executionKey);
+  mkdirSync(path, {recursive:true});
+  writeFileSync(join(path,'receipt.json'), JSON.stringify({
+    state:'APPLIED_LOCALLY', planId:'plan-b', planHash:EVIDENCE.planHash,
+    executionKey:EVIDENCE.executionKey,
+    humanApprovalEvidence: { approvalMessageId:EVIDENCE.approvalPost, switchRoomId:'room:cascade-operations' },
+    actions:[{ artifact:'schedule.json',status:'applied-locally' }]
+  }));
+  writeFileSync(join(path,'schedule.json'), JSON.stringify({
+    planId:'plan-b', projectedCostINR:83000, allocations:[
+      {attendeeFrom:0,attendeeTo:249,start:'2026-11-06T10:00:00+05:30'},
+      {attendeeFrom:250,attendeeTo:429,start:'2026-11-06T10:00:00+05:30'}
+    ]
+  }));
+  writeFileSync(join(path,'assignments.json'), JSON.stringify({
+    totalAttendees:430, hallAssignments:[
+      {attendeeCount:250,attendeeRange:[0,249]},
+      {attendeeCount:180,attendeeRange:[250,429]}
+    ]
+  }));
+  writeFileSync(join(path,'stakeholder-messages.md'),
+    '# Drafts only — NOT SENT\nThis message has not been sent.\n');
+  return {root,path};
+}
+
+test('Demo: accepts matching real local artifact schema and extracts source checksums', () => {
+  const {root}=fixtureRoot();
+  try {
+    const result=loadVerifiedArtifacts(root);
+    assert.equal(result.schedule.hallA,250);
+    assert.equal(result.assignments.totalAttendees,430);
+    assert.match(result.checksums['receipt.json'],/^[a-f0-9]{64}$/);
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+test('Demo: refuses synthetic artifact tampering', () => {
+  const {root,path}=fixtureRoot();
+  try {
+    writeFileSync(join(path,'stakeholder-messages.md'),'An attendee notification was sent.');
+    assert.throws(() => loadVerifiedArtifacts(root),/unexpected content/);
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+test('Demo: HTML scene renderer escapes untrusted text', () => {
+  const output=sceneHtml({
+    type:'title', title:'<script>alert(1)</script>',
+    subtitle:'The scene is safe',
+    hero:'No fake evidence'
+  },0,1);
+  assert.ok(output.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+  assert.ok(!output.includes('<script>alert(1)</script>'));
+  assert.ok(output.includes('width:100%'));
+});
+
+test('Demo: does not allow output path traversal outside project', () => {
+  assert.equal(assertWithin('/repo','/repo/artifacts'),'/repo/artifacts');
+  assert.throws(() => assertWithin('/repo','/repo-evil/foo'));
+});
+
+test('Demo: HTML sanitization is deterministic', () => {
+  assert.equal(safeHtml('A&B <"test">'), 'A&amp;B &lt;&quot;test&quot;&gt;');
+});
+
+
+test('Demo: accepts metadata-prefixed structured MCP output without copying the prefix', () => {
+  const structured = {
+    exit_code: 0,
+    success: true,
+    stdout: 'Plan Hash: ' + EVIDENCE.planHash +
+      '\nState: APPLIED_LOCALLY\nAlready Applied: true\n',
+    stderr: '',
+    private_token: 'should-not-appear',
+  };
+  const entries = [
+    {
+      step_index: 107, source: 'MODEL', type: 'PLANNER_RESPONSE',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: 'cascade_execute_recovery', Arguments: '{"approval_message_id":"' + EVIDENCE.approvalPost + '"}' },
+      }],
+    },
+    {
+      step_index: 108, source: 'TOOL', type: 'MCP_TOOL',
+      content: 'Created At: 2026-11-04T18:30:00Z\nTool response:\n' + JSON.stringify(structured) + '\n',
+    },
+  ];
+  const result = extractVerifiedAcpTranscript(entries.map(JSON.stringify).join('\n'));
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.alreadyApplied, true);
+  assert.ok(!JSON.stringify(result).includes('private_token'));
+});
+
+test('Demo: accepts nested MCP content text blocks with a real structured result', () => {
+  const entries = [
+    {
+      step_index: 107, source: 'MODEL', type: 'PLANNER_RESPONSE',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: 'cascade_execute_recovery', Arguments: EVIDENCE.approvalPost },
+      }],
+    },
+    {
+      step_index: 108, source: 'TOOL', type: 'MCP_TOOL',
+      content: [{ type: 'text', text: 'Created At:\n' + JSON.stringify({
+        exit_code: 0, success: true,
+        stdout: 'Plan Hash: ' + EVIDENCE.planHash + '\nState: APPLIED_LOCALLY\nAlready Applied: true',
+      }) }],
+    },
+  ];
+  assert.equal(extractVerifiedAcpTranscript(entries.map(JSON.stringify).join('\n')).exitCode, 0);
+});
+
+test('Demo: rejects plain ACP metadata that contains no actual structured execution proof', () => {
+  const entries = [
+    {
+      step_index: 107, source: 'MODEL', type: 'PLANNER_RESPONSE',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: 'cascade_execute_recovery', Arguments: EVIDENCE.approvalPost },
+      }],
+    },
+    {
+      step_index: 108, source: 'TOOL', type: 'MCP_TOOL',
+      content: 'Created At: 2026-11-04 20:00\nThe agent said success.',
+    },
+  ];
+  assert.throws(() => extractVerifiedAcpTranscript(entries.map(JSON.stringify).join('\n')),
+    /no structured recovery tool result/i);
+});
+
+test('Demo: rejects a MODEL-authored fake tool result even when it contains a success JSON', () => {
+  const entries = [
+    {
+      step_index: 107, source: 'MODEL', type: 'PLANNER_RESPONSE',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: 'cascade_execute_recovery', Arguments: EVIDENCE.approvalPost },
+      }],
+    },
+    {
+      step_index: 108, source: 'MODEL', type: 'MCP_TOOL',
+      content: {
+        exit_code: 0, success: true,
+        stdout: 'Plan Hash: ' + EVIDENCE.planHash + '\nState: APPLIED_LOCALLY\nAlready Applied: true',
+      },
+    },
+  ];
+  assert.throws(() => extractVerifiedAcpTranscript(entries.map(JSON.stringify).join('\n')),
+    /different source\/type metadata than the verified parser supports/);
+});
+
+test('Demo: rejects bad local JSON with filename-only error instead of leaking contents', () => {
+  const {root,path} = fixtureRoot();
+  try {
+    writeFileSync(join(path, 'receipt.json'), 'Created At: not a JSON document. SECRET_TOKEN=hidden');
+    assert.throws(() => loadVerifiedArtifacts(root), (error) => {
+      assert.match(error.message, /receipt\.json/);
+      assert.ok(!error.message.includes('SECRET_TOKEN'));
+      return true;
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('Demo: ACP safe inspection reports only allowlisted field types, never private values', () => {
+  const raw = [
+    {
+      step_index: 107,
+      source: 'AGENT',
+      type: 'SOMETHING_DIFFERENT',
+      tool_calls: [{
+        name: 'call_mcp_tool',
+        args: { ToolName: 'cascade_execute_recovery', Arguments: EVIDENCE.approvalPost },
+      }],
+      private_password: 'TOP_SECRET_DO_NOT_ECHO',
+    },
+    {
+      step_index: 108,
+      source: 'RPC',
+      type: 'TOOL_RESULT_V2',
+      content: { success: true, token: 'PERSONAL_SECRET_TOKEN' },
+      untrusted_message: 'THIS_SHOULD_NOT_BE_SHARED',
+    },
+  ].map(JSON.stringify).join('\n');
+  const report = inspectAcpShape(raw);
+  assert.equal(report.step107.present, true);
+  assert.equal(report.step108.present, true);
+  assert.equal(report.step107.toolCallCount, 1);
+  assert.equal(report.step107.sourceRole, 'other-or-unset');
+  const serialized = JSON.stringify(report);
+  assert.ok(!serialized.includes('TOP_SECRET_DO_NOT_ECHO'));
+  assert.ok(!serialized.includes('PERSONAL_SECRET_TOKEN'));
+  assert.ok(!serialized.includes('THIS_SHOULD_NOT_BE_SHARED'));
+  assert.ok(!serialized.includes(EVIDENCE.approvalPost));
+});
+
+test('Demo: ACP safe inspection never returns raw transcript on malformed lines', () => {
+  const raw = '{ bad-json SECRET\n' + JSON.stringify({
+    step_index: 107, source: 'MODEL', tool_calls: [],
+  });
+  const report = inspectAcpShape(raw);
+  assert.equal(report.step107.sourceRole, 'model');
+  assert.deepEqual(report.step108, { present: false });
+  assert.ok(!JSON.stringify(report).includes('SECRET'));
+});
+
+
+test('Demo V2: authenticated bot status requires exact human approval and plan hash', () => {
+  const status = {
+    id: 'abcdefghijklmnopqrstuvwxyz', channel_id: EVIDENCE.channelId,
+    user_id: 'bot-account', create_at: 1793812404513,
+    message: 'CASCADE Recovery Status — Event 430 Verified\nState: APPLIED_LOCALLY\n' +
+      EVIDENCE.planHash + '\nVerified post ' + EVIDENCE.approvalPost,
+    props: {},
+  };
+  assert.equal(verifyMattermostEvidence(status, bot, 'status').kind, 'status');
+  assert.throws(() => verifyMattermostEvidence(status, human, 'status'));
+  assert.throws(() => verifyMattermostEvidence({
+    ...status, message: status.message.replace(EVIDENCE.approvalPost, 'another-post')
+  }, bot, 'status'));
+});
+
+test('Demo V2: presentation renderer makes verified API cards readable and accurately labeled', () => {
+  const scene = {
+    type: 'evidence',
+    title: 'HUMAN AUTHORIZATION',
+    subtitle: 'Authenticated source',
+    proof: {
+      source: 'VERIFIED MATTERMOST API',
+      headline: 'HUMAN APPROVED INR 3000',
+      explanation: 'Not a screenshot.',
+      fields: [
+        {label: 'Human', value: 'verified'},
+        {label: 'Post ID', value: EVIDENCE.approvalPost},
+      ],
+      disclaimer: 'From authenticated metadata, not fabricated UI',
+    },
+    bullets: ['Plan hash bound'],
+  };
+  const html = sceneHtml(scene, 1, 9);
+  assert.match(html, /proof-panel/);
+  assert.match(html, /VERIFIED MATTERMOST API/);
+  assert.match(html, /Not a screenshot/);
+  assert.match(html, /HUMAN APPROVED INR 3000/);
+  assert.match(html, /width:22%/);
+});
+
+test('Demo V2: Switch workflow diagram has explicit human, room, agent and engine roles', () => {
+  const html = sceneHtml({
+    title: 'WHY SWITCH MATTERS', subtitle: 'Human AI collaboration',
+    flowSteps: [
+      {name: 'HUMAN',detail: 'Authorizes exception'},
+      {name: 'SWITCH',detail: 'Shared room'},
+      {name: 'ANTIGRAVITY',detail: 'Agent tools'},
+      {name: 'CASCADE',detail: 'Constraint engine'},
+    ],
+  }, 0, 5);
+  for (const value of ['flow-panel','HUMAN','SWITCH','ANTIGRAVITY','CASCADE']) {
+    assert.match(html, new RegExp(value));
+  }
+  assert.ok(!html.includes('fake screenshot'));
+});

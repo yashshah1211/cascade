@@ -1,0 +1,12 @@
+{
+  "name": "cascade-demo-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only, evidence-verified CASCADE demo recorder for Windows",
+  "dependencies": {
+    "playwright": "^1.56.0",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0"
+  }
+}

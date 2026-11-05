@@ -12,7 +12,7 @@ A 430-person hackathon loses its auditorium. Seven commitments — capacity, AV 
 
 > **Demonstrated:** real human–agent Switch chat, Antigravity-initiated plan evaluation, human-authored budget approval, verified local execution and a receipt posted to the room. A later Antigravity tool call checked the same approved recovery and returned an idempotent replay. **The incident and venue data are synthetic. No real booking, payment, or attendee notification occurred.**
 
-[**The 3-minute demo runbook**](docs/DEMO_RUNBOOK.md) · [**Architecture and Switch evidence**](docs/SWITCH_INTEGRATION.md) · [**Submission text**](docs/SUBMISSION.md)
+[**One-click Windows demo recorder**](tools/demo-studio/README.md) · [**The 3-minute demo runbook**](docs/DEMO_RUNBOOK.md) · [**Architecture and Switch evidence**](docs/SWITCH_INTEGRATION.md) · [**Submission text**](docs/SUBMISSION.md)
 
 ---
 

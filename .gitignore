@@ -23,3 +23,7 @@ scratch/
 .gemini/
 switchdash/
 private-evidence/
+
+.demo-studio-profile/
+demo-output/
+tools/demo-studio/package-lock.json
