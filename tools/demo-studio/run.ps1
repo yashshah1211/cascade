@@ -58,7 +58,7 @@ try {
 
     Write-Host ""
     if (-not $CheckOnly -and -not $CaptureOnly -and -not $InspectAcp) {
-        $outputFile = Join-Path $repoRoot "demo-output\CASCADE_FlipTheSwitch_Demo.mp4"
+        $outputFile = Join-Path $repoRoot "demo-output\CASCADE_FlipTheSwitch_Demo_V2.mp4"
         Write-Host "SUCCESS! MP4 saved to:"
         Write-Host $outputFile
         Write-Host "REVIEW THE VIDEO before publicly sharing it."
