@@ -358,7 +358,7 @@ function narrationScenes(local, posts) {
       subtitle: 'The promises still have to survive.',
       hero: '430 people · 7 commitments · 1 accountable team decision',
       label: 'FLIP THE SWITCH 2026 · BUSINESS WORKFLOW',
-      narration: 'A cancelled auditorium. Four hundred and thirty attendees. Seven commitments at risk. CASCADE doesn't just suggest an alternative. It checks which promises a recovery plan actually keeps.',
+      narration: 'A cancelled auditorium. Four hundred and thirty attendees. Seven commitments at risk. CASCADE does not just suggest an alternative. It checks which promises a recovery plan actually keeps.',
     },
     {
       id: 'incident', type: hasIncident ? 'evidence' : 'code', title: 'THE INCIDENT',
