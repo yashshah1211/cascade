@@ -2,7 +2,7 @@
 
 This is a **one-click, read-only evidence video generator** for the existing CASCADE event-430 demonstration.
 
-**Output:** `demo-output/CASCADE_FlipTheSwitch_Demo.mp4` (1920 × 1080, 30 fps; H.264/AAC).
+**Output:** `demo-output/CASCADE_FlipTheSwitch_Demo_V2.mp4` (1920 × 1080, 30 fps; H.264/AAC).
 
 It **does not** create a new event, post new Mattermost messages, impersonate a human, repeat approval, or book anything. It creates a narrated, branded **montage from authenticated real screenshots**, actual local artifacts and a *sanitized* Antigravity execution trace. This is **not** continuous footage of a brand-new live workflow. Narration explicitly distinguishes the original local execution from the later agent-triggered idempotent replay.
 
@@ -141,3 +141,8 @@ Run `npm test` from the repository root. This includes evidence-validation, HTML
 **Important limitation:** GitHub Actions can test the parsing and scripts but cannot run your authenticated local Mattermost browser or Windows speech synthesizer. After checking the video on your machine, inspect all scenes for legibility, correct source evidence, narration accuracy, and private information before submitting.
 
 **Do not claim the video depicts a single uninterrupted live recovery.** It is a documented, faithfully labeled narrated montage of authentic historical Switch evidence and real local outputs.
+
+
+## V2 presentation upgrades
+
+The V2 output preserves the first-render MP4 under its original filename. V2 uses larger typography for the verified human approval and local receipt, a diagram demonstrating why Switch is central, an extra genuine archived Mattermost screenshot when available, read-only discovery of the original human incident, optional authentic bot-status evidence, and normalized narration with peak headroom. It still stops on missing mandatory local artifacts and never invents the unverified ACP tool trace. Review docs/VIDEO_ACCEPTANCE.md before uploading.
