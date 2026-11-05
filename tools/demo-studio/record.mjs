@@ -128,7 +128,8 @@ async function screenshotPost(page, id, kind, screenshotPath) {
   await page.goto(base + '/switch/pl/' + id, { waitUntil: 'domcontentloaded', timeout: 30000 });
   const marker = kind === 'evaluation' ? 'Disruption Evaluation Report' :
     kind === 'approval' ? 'CASCADE APPROVE' :
-    kind === 'receipt' ? 'CASCADE RECOVERY PLAN EXECUTED LOCALLY' : 'CASCADE INCIDENT REPORT';
+    kind === 'receipt' ? 'CASCADE RECOVERY PLAN EXECUTED LOCALLY' :
+    kind === 'status' ? 'CASCADE Recovery Status' : 'CASCADE INCIDENT REPORT';
   await page.waitForFunction(
     (needle) => document.body?.innerText?.includes(needle) ?? false,
     marker, { timeout: 25000 },
@@ -159,6 +160,26 @@ async function screenshotPost(page, id, kind, screenshotPath) {
     throw new Error('The ' + kind + ' post image is unexpectedly small. Refusing a blank capture.');
   }
   return sha256(bytes);
+}
+
+async function findVerifiedBotStatus(context) {
+  // This is an optional historical Mattermost bot message, not an assertion
+  // that an ACP tool call was independently reproduced during recording.
+  const listing = await getJson(context,
+    '/api/v4/channels/' + EVIDENCE.channelId + '/posts?per_page=100&page=0');
+  if (!listing?.posts || !Array.isArray(listing.order)) return null;
+  for (const id of listing.order) {
+    const post = listing.posts[id];
+    if (!post || !post.message?.includes('CASCADE Recovery Status') ||
+        !post.message.includes('APPLIED_LOCALLY') ||
+        !post.message.includes(EVIDENCE.planHash) ||
+        !post.message.includes(EVIDENCE.approvalPost)) continue;
+    const user = await getJson(context, '/api/v4/users/' + post.user_id);
+    if (!user) continue;
+    try { return { post, meta: verifyMattermostEvidence(post, user, 'status') }; }
+    catch { /* A separate bot or unrelated post must not be presented as proof. */ }
+  }
+  return null;
 }
 
 async function captureEvidence() {
@@ -194,6 +215,11 @@ async function captureEvidence() {
       }
     } else {
       log('Incident post ID not discoverable; using a clearly labeled synthetic context card.');
+    }
+    const botStatus = await findVerifiedBotStatus(context);
+    if (botStatus) {
+      entries.push({ id: botStatus.post.id, kind: 'status' });
+      log('Found additional authenticated bot status: ' + botStatus.post.id);
     }
     for (const { id, kind } of entries) {
       log('Verifying authenticated ' + kind + ' evidence: ' + id);
@@ -254,6 +280,10 @@ function narrationScenes(local, posts) {
       'Deterministic report contains AV_CONCURRENCY',
       'Plan B: REQUIRES_APPROVAL',
       'Plan Hash: ' + EVIDENCE.planHash,
+    ] : kind === 'status' ? [
+      'Bot-reported verification: APPLIED_LOCALLY',
+      'Refers to existing human approval',
+      'This is a chat status, not raw ACP tool-call evidence',
     ] : [
       'Original incident report: event-430',
       'Source: authenticated human-authored post',
@@ -261,6 +291,56 @@ function narrationScenes(local, posts) {
     return header.concat(details, '', 'API SUMMARY · NOT A SCREENSHOT').join('\n');
   };
   const verifiedArtifacts = local.artifacts;
+  const proof = (kind) => {
+    const record = posts.find(item => item.kind === kind);
+    if (!record) return null;
+    const shared = {
+      source: 'VERIFIED MATTERMOST RECORD · READABLE PRESENTATION',
+      disclaimer: 'Source: authenticated Mattermost API · ' + record.id +
+        ' · Not an unedited chat screenshot',
+    };
+    if (kind === 'evaluation') return {
+      ...shared, headline: '2 FAIL · 1 NEEDS APPROVAL',
+      explanation: 'The agent published the engine-backed constraint results in Switch.',
+      fields: [
+        { label: 'Plan A', value: 'FAIL · concurrent AV' },
+        { label: 'Plan B', value: '₹3,000 exception' },
+        { label: 'Plan C', value: 'FAIL · kickoff timing' },
+        { label: 'Plan hash', value: EVIDENCE.planHash.slice(0, 18) + '…' },
+      ],
+    };
+    if (kind === 'approval') return {
+      ...shared, headline: 'HUMAN APPROVED ₹3,000',
+      explanation: 'An exact message from the authorized human, not an agent-written claim.',
+      fields: [
+        { label: 'Approval', value: 'CASCADE APPROVE' },
+        { label: 'Max extra', value: 'INR 3,000' },
+        { label: 'Verified room', value: 'Switch · Town Square' },
+        { label: 'Bound plan', value: EVIDENCE.planHash.slice(0, 18) + '…' },
+      ],
+    };
+    if (kind === 'receipt') return {
+      ...shared, headline: 'APPLIED LOCALLY',
+      explanation: 'The published receipt reports local artifacts, not a real-world purchase.',
+      fields: [
+        { label: 'Receipt state', value: 'APPLIED_LOCALLY' },
+        { label: 'Plan', value: 'Plan B · 430 attendees' },
+        { label: 'Human approval', value: EVIDENCE.approvalPost },
+        { label: 'External actions', value: 'NONE' },
+      ],
+    };
+    if (kind === 'status') return {
+      ...shared, headline: 'AGENT STATUS IN SWITCH',
+      explanation: 'The bot later posted its verified recovery status to the team room.',
+      fields: [
+        { label: 'Published by', value: 'switch-buddy-admin · bot' },
+        { label: 'Reported state', value: 'APPLIED_LOCALLY' },
+        { label: 'Approval reference', value: EVIDENCE.approvalPost },
+        { label: 'Evidence limit', value: 'Chat status, not raw tool trace' },
+      ],
+    };
+    return null;
+  };
   const code = local.transcript ? [
     'SOURCE: LOCAL ANTIGRAVITY ACP TRANSCRIPT',
     'Session: ' + local.transcript.sessionId,
@@ -278,7 +358,7 @@ function narrationScenes(local, posts) {
       subtitle: 'The promises still have to survive.',
       hero: '430 people · 7 commitments · 1 accountable team decision',
       label: 'FLIP THE SWITCH 2026 · BUSINESS WORKFLOW',
-      narration: 'A cancelled auditorium. Four hundred and thirty people arriving. Seven commitments are suddenly at risk. A chatbot can suggest a new plan. CASCADE asks a harder question: which promises can we actually keep?',
+      narration: 'A cancelled auditorium. Four hundred and thirty attendees. Seven commitments at risk. CASCADE doesn't just suggest an alternative. It checks which promises a recovery plan actually keeps.',
     },
     {
       id: 'incident', type: hasIncident ? 'evidence' : 'code', title: 'THE INCIDENT',
@@ -298,14 +378,26 @@ function narrationScenes(local, posts) {
       ].join('\n'),
       codeLabel: 'SOURCE: FIXTURE (NOT A CHAT POST)',
       bullets: ['One critical dependency fails.', 'Seven obligations remain.', 'Switch is the team room.'],
-      narration: 'In our synthetic hackathon incident, the original auditorium becomes unavailable, but accessibility, seating, synchronized kickoff, sponsor timing, and budget still matter. The event organizer brings the incident into the shared Switch and Mattermost workspace.',
+      narration: 'In our synthetic hackathon incident, a human brings the auditorium cancellation into the shared Switch and Mattermost room. Capacity, accessibility, the synchronized kickoff and the budget are all still at stake.',
+    },
+    {
+      id: 'switch-flow', type: 'flow', title: 'WHY SWITCH MATTERS',
+      subtitle: 'One team room connects human decisions to the agent and its real tools.',
+      flowSteps: [
+        { name: 'HUMAN', detail: 'Incident and exact approval in Mattermost' },
+        { name: 'SWITCH', detail: 'Shared room and agent tool access' },
+        { name: 'ANTIGRAVITY', detail: 'Receives the incident and calls the engine' },
+        { name: 'CASCADE', detail: 'Deterministic checks and local receipt' },
+      ],
+      flowSummary: 'Without Switch, the offline engine works — but the shared human–agent workflow does not.',
+      bullets: ['Shared history, not separate chat tabs.', 'Tool-backed evaluation.', 'Human-controlled budget exception.'],
+      narration: 'Switch turns Antigravity into a teammate inside Mattermost. The agent calls deterministic CASCADE tools, while the human owns the spending decision. The offline engine can run alone, but this shared approval workflow cannot.',
     },
     {
       id: 'evaluation', type: 'evidence', title: 'THE AGENT CALLS THE ENGINE',
       subtitle: 'Real Mattermost report · computed constraint results, not guesses.',
       imageData: file('evaluation'),
-      code: file('evaluation') ? null : sourceCard('evaluation'),
-      codeLabel: 'SOURCE: VERIFIED API SUMMARY · NO UI IMAGE',
+      proof: proof('evaluation'),
       bullets: ['Plan A fails concurrent AV.', 'Plan C breaks synchronized kickoff.', 'Plan B needs exact budget approval.'],
       sourceNote: 'Verified post: ' + EVIDENCE.evaluationPost,
       narration: 'Antigravity invokes a Switch tool connected to our deterministic TypeScript engine. Plan A fails because two simultaneous halls need two AV kits. Plan C breaks the promised shared kickoff. Plan B meets the hard constraints, but requires three thousand rupees more.',
@@ -331,8 +423,7 @@ function narrationScenes(local, posts) {
       id: 'approval', type: 'evidence', title: 'THE HUMAN MAKES THE EXCEPTION',
       subtitle: 'Authenticated Mattermost approval · exact plan hash and spending cap.',
       imageData: file('approval'),
-      code: file('approval') ? null : sourceCard('approval'),
-      codeLabel: 'SOURCE: VERIFIED API SUMMARY · NO UI IMAGE',
+      proof: proof('approval'),
       bullets: ['Human author verified.', 'Room and server checked.', 'Plan hash and INR 3,000 match.'],
       sourceNote: 'Verified owner post: ' + EVIDENCE.approvalPost,
       narration: 'The AI is not permitted to authorize its own budget exception. The human owner personally submits a hash-bound approval in Mattermost. CASCADE fetches the actual message, verifies its author, room, timestamp, exact plan and maximum extra spend before allowing execution.',
@@ -341,8 +432,7 @@ function narrationScenes(local, posts) {
       id: 'receipt', type: 'evidence', title: 'AUTHORIZATION IS NOT EXECUTION',
       subtitle: 'The local receipt was actually posted back to the team room.',
       imageData: file('receipt'),
-      code: file('receipt') ? null : sourceCard('receipt'),
-      codeLabel: 'SOURCE: VERIFIED API SUMMARY · NO UI IMAGE',
+      proof: proof('receipt'),
       bullets: ['State: APPLIED_LOCALLY.', 'Approval is traceable.', 'No purchases or notifications.'],
       sourceNote: 'Verified receipt post: ' + EVIDENCE.receiptPost,
       narration: 'After verifying the approval, CASCADE generated the recovery artifacts and published a real receipt in the Switch conversation. Its state is applied locally. It does not claim that a physical venue was booked or that a supplier received payment.',
@@ -376,13 +466,21 @@ function narrationScenes(local, posts) {
       narration: 'Later, Antigravity itself invoked the recovery tool through Switch again. The engine returned success, confirmed the existing artifacts were already applied, and avoided posting a duplicate receipt. This is an idempotent replay, not a claim of first-time execution by the agent.',
     },
     {
+      id: 'status', type: 'evidence', title: 'THE AGENT REPORTS BACK',
+      subtitle: 'A later status message closes the shared Switch collaboration loop.',
+      imageData: file('status'),
+      proof: proof('status'),
+      bullets: ['Bot-authored Mattermost message.', 'Refers to the approved Plan B.', 'A reported status — not independent ACP proof.'],
+      narration: 'The bot later reports the verified recovery status in the same Switch conversation, linking the local result to the human approval. This is a genuine chat message. The historical raw tool trace is shown only if separately verified.',
+    },
+    {
       id: 'closing', type: 'title', title: 'ACCOUNTABLE AI WORKFLOWS',
       subtitle: 'Built for the Best Business Workflow challenge.',
       hero: 'The agent coordinates. The engine checks. The human authorizes.',
       label: 'CASCADE · GITHUB.COM/YASHSHAH1211/CASCADE',
       narration: 'CASCADE turns a crisis from a convincing AI suggestion into an accountable team decision. The agent coordinates. The engine checks the promises. The human approves exceptions. And Switch keeps everyone in the same workflow. CASCADE: when a plan breaks, the promises don’t have to.',
     },
-  ].filter(scene => scene.id !== 'agent-proof' || local.transcript !== null);
+  ].filter(scene => (scene.id !== 'agent-proof' || local.transcript !== null) && (scene.id !== 'status' || proof('status') !== null));
 }
 
 function audioDuration(path) {
