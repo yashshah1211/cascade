@@ -67,6 +67,15 @@ export function verifyMattermostEvidence(post, user, kind) {
         !post.message.includes('CASCADE INCIDENT REPORT')) {
       throw new Error('The optional incident post is not the genuine human incident.');
     }
+  } else if (kind === 'status') {
+    // Optional bot-reported status, not a substitute for the independent
+    // receipt verifier or raw ACP tool-call evidence.
+    if (!isBot || !post.message.includes('CASCADE Recovery Status') ||
+        !post.message.includes('APPLIED_LOCALLY') ||
+        !post.message.includes(EVIDENCE.planHash) ||
+        !post.message.includes(EVIDENCE.approvalPost)) {
+      throw new Error('The bot status post does not match the previously verified event-430 recovery.');
+    }
   } else {
     throw new Error('Unknown evidence kind.');
   }
